@@ -1,0 +1,59 @@
+{
+  "name": "@open330/arxiblog",
+  "version": "0.1.0",
+  "description": "Turn any arXiv paper into a friendly, annotated blog post that non-academics can actually read — powered by LLM",
+  "type": "module",
+  "bin": {
+    "arxiblog": "./bin/arxiblog"
+  },
+  "files": [
+    "bin/**/*",
+    "src/**/*",
+    "personas/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "arxiv",
+    "blog",
+    "paper",
+    "research",
+    "llm",
+    "science-communication",
+    "annotations",
+    "explainer",
+    "bun"
+  ],
+  "author": "open330",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open330/arxiblog.git"
+  },
+  "homepage": "https://github.com/open330/arxiblog",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "commander": "^12.1.0",
+    "gh-pages": "^6.3.0",
+    "marked": "^15.0.0",
+    "pdf-parse": "1.1.1",
+    "sanitize-html": "^2.17.2",
+    "smol-toml": "^1.3.1"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.79.0",
+    "openai": "^6.31.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/sanitize-html": "^2.16.1"
+  }
+}

@@ -1,0 +1,210 @@
+import { join, normalize, extname, sep } from "path";
+import { existsSync, statSync } from "fs";
+import { DB_FILE, loadConfig, saveConfig } from "./config";
+import { Store } from "./store";
+import { LLMClient } from "./llm-client";
+import { answerQuestion, type ChatTurn } from "./pipeline/chat";
+import { addPaper } from "./pipeline/add";
+import { buildSite } from "./build/renderer";
+import { renderAdminPage } from "./build/templates";
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+};
+
+function safeJoin(root: string, urlPath: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath.split("?")[0]);
+  } catch {
+    return null;
+  }
+  const rootNorm = normalize(root);
+  const full = normalize(join(root, decoded));
+  if (full !== rootNorm && !full.startsWith(rootNorm + sep)) return null;
+  return full;
+}
+
+export function startServer(projectRoot: string, port: number, host = "localhost"): void {
+  const initialConfig = loadConfig(projectRoot);
+  const siteDir = join(projectRoot, initialConfig.build.output_dir);
+  const store = new Store(join(projectRoot, DB_FILE));
+  const adminToken = crypto.randomUUID().replace(/-/g, "");
+
+  // Serialize add/settings/delete so concurrent writes + rebuilds don't race.
+  let writeChain: Promise<unknown> = Promise.resolve();
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = writeChain.then(fn, fn);
+    writeChain = next.catch(() => {});
+    return next;
+  };
+
+  const tokenOk = (req: Request, url: URL): boolean => {
+    const t =
+      url.searchParams.get("token") ||
+      (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    return t === adminToken;
+  };
+
+  Bun.serve({
+    port,
+    hostname: host,
+    idleTimeout: 255, // allow long LLM calls during /api/add
+    async fetch(req) {
+      const url = new URL(req.url);
+      const path = url.pathname;
+
+      // ── Admin page (form only; mutations require the token) ──
+      if (path === "/admin" && req.method === "GET") {
+        return new Response(renderAdminPage(loadConfig(projectRoot)), {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+
+      // ── Public read APIs ──
+      if (path === "/api/chat" && req.method === "POST") return handleChat(req, projectRoot, store);
+      if (path === "/api/posts" && req.method === "GET") {
+        return Response.json({
+          posts: store.listPosts().map((p) => ({
+            slug: p.slug, title: p.title, arxiv_id: p.arxiv_id,
+            reading_minutes: p.reading_minutes, persona: p.persona, level: p.level,
+          })),
+        });
+      }
+
+      // ── Token-gated admin APIs ──
+      if (path === "/api/config" && req.method === "GET") {
+        if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
+        const c = loadConfig(projectRoot);
+        return Response.json({
+          provider: c.llm.provider, model: c.llm.model, endpoint: c.llm.endpoint,
+          hasKey: !!c.llm.api_key, active_persona: c.active_persona, default_level: c.default_level,
+          personas: (c.personas || []).map((p) => ({ name: p.name, description: p.description })),
+        });
+      }
+      if (path === "/api/settings" && req.method === "POST") {
+        if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
+        return serialize(() => handleSettings(req, projectRoot));
+      }
+      if (path === "/api/add" && req.method === "POST") {
+        if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
+        return serialize(() => handleAdd(req, projectRoot, store));
+      }
+      if (path === "/api/delete" && req.method === "POST") {
+        if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
+        return serialize(() => handleDelete(req, projectRoot, store));
+      }
+
+      // ── Static files ──
+      let pathname = path === "/" ? "/index.html" : path;
+      let filePath = safeJoin(siteDir, pathname);
+      if (!filePath) return new Response("Forbidden", { status: 403 });
+      if (existsSync(filePath) && statSync(filePath).isDirectory()) {
+        filePath = join(filePath, "index.html");
+      } else if (!existsSync(filePath) && !extname(filePath)) {
+        if (existsSync(filePath + ".html")) filePath += ".html";
+      }
+      if (!existsSync(filePath)) return new Response("Not found", { status: 404 });
+      return new Response(Bun.file(filePath), {
+        headers: { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" },
+      });
+    },
+    error() {
+      return new Response("Internal error", { status: 500 });
+    },
+  });
+
+  const shown = host === "0.0.0.0" ? "localhost" : host;
+  console.log(`\x1b[32m🚀 arxiblog 서버 실행 중:\x1b[0m http://${shown}:${port}`);
+  if (host === "0.0.0.0") console.log(`   LAN: 같은 네트워크에서 http://<이-기기-IP>:${port}`);
+  console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin?token=${adminToken}`);
+  console.log(`   (정지: Ctrl+C)`);
+}
+
+async function handleChat(req: Request, projectRoot: string, store: Store): Promise<Response> {
+  try {
+    const body = (await req.json()) as { slug?: string; question?: string; history?: ChatTurn[] };
+    const slug = (body.slug || "").trim();
+    const question = (body.question || "").trim();
+    if (!slug || !question) return Response.json({ error: "slug과 question이 필요합니다." }, { status: 400 });
+
+    const config = loadConfig(projectRoot);
+    if (!config.llm.api_key || config.llm.provider === "demo") {
+      return Response.json(
+        { answer: "LLM API 키가 설정되어 있지 않아 채팅을 사용할 수 없어요. 관리 페이지에서 키를 넣어주세요." },
+        { status: 200 }
+      );
+    }
+    const post = store.getPost(slug);
+    if (!post) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
+    const llm = new LLMClient(config.llm);
+    const answer = await answerQuestion(llm, store, post, question, body.history || []);
+    const u = llm.getUsageStats();
+    store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
+    return Response.json({ answer });
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+}
+
+async function handleAdd(req: Request, projectRoot: string, store: Store): Promise<Response> {
+  try {
+    const body = (await req.json()) as { source?: string; level?: string; persona?: string };
+    const source = (body.source || "").trim();
+    if (!source) return Response.json({ error: "arXiv ID 또는 URL이 필요합니다." }, { status: 400 });
+    const config = loadConfig(projectRoot);
+    if (!config.llm.api_key) return Response.json({ error: "LLM API 키가 설정되지 않았습니다." }, { status: 400 });
+
+    const result = await addPaper(store, config, source, { level: body.level, persona: body.persona });
+    await buildSite(store, config, projectRoot);
+    return Response.json({
+      ok: true, slug: result.slug, title: result.title, arxiv_id: result.arxivId,
+      annotations: result.annotationCount, minutes: result.minutes,
+      tokens: result.usage.totalTokens, cost: result.cost,
+    });
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+}
+
+async function handleSettings(req: Request, projectRoot: string): Promise<Response> {
+  try {
+    const body = (await req.json()) as Partial<{
+      provider: string; model: string; api_key: string; endpoint: string;
+      active_persona: string; default_level: string;
+    }>;
+    const config = loadConfig(projectRoot);
+    if (body.provider) config.llm.provider = body.provider;
+    if (body.model) config.llm.model = body.model;
+    if (typeof body.api_key === "string" && body.api_key.trim()) config.llm.api_key = body.api_key.trim();
+    if (typeof body.endpoint === "string") config.llm.endpoint = body.endpoint;
+    if (body.active_persona) config.active_persona = body.active_persona;
+    if (body.default_level) config.default_level = body.default_level;
+    saveConfig(projectRoot, config);
+    return Response.json({ ok: true });
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+}
+
+async function handleDelete(req: Request, projectRoot: string, store: Store): Promise<Response> {
+  try {
+    const body = (await req.json()) as { slug?: string };
+    const slug = (body.slug || "").trim();
+    if (!slug) return Response.json({ error: "slug이 필요합니다." }, { status: 400 });
+    if (!store.getPost(slug)) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
+    store.deletePost(slug);
+    await buildSite(store, loadConfig(projectRoot), projectRoot);
+    return Response.json({ ok: true });
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+}
