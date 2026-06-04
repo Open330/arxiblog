@@ -162,12 +162,30 @@ export async function buildSite(store: Store, config: ArxiblogConfig, projectRoo
   if (existsSync(assetsDir)) cpSync(assetsDir, staticDir, { recursive: true });
 
   const posts = store.listPosts();
+  const catsOf = (p: { categories?: string }) =>
+    new Set((p.categories || "").split(",").map((c) => c.trim()).filter(Boolean));
 
   for (const post of posts) {
     const annotations = store.getAnnotations(post.id);
     const toc = generateToc(post.content);
     const bodyHtml = injectHeadingIds(await renderPostBody(post.content, annotations), toc);
-    const html = renderPostPage({ config, post, bodyHtml, toc, annotations });
+
+    // Related: other posts sharing the most arXiv categories (fallback: most recent).
+    const mine = catsOf(post);
+    const related = posts
+      .filter((p) => p.slug !== post.slug)
+      .map((p) => ({ p, overlap: [...catsOf(p)].filter((c) => mine.has(c)).length }))
+      .sort((a, b) => b.overlap - a.overlap)
+      .slice(0, 3)
+      .filter((x) => x.overlap > 0 || posts.length <= 4)
+      .map((x) => ({
+        slug: x.p.slug,
+        title: x.p.title,
+        arxiv_id: x.p.arxiv_id,
+        reading_minutes: x.p.reading_minutes,
+      }));
+
+    const html = renderPostPage({ config, post, bodyHtml, toc, annotations, related });
     await Bun.write(join(postsDir, `${post.slug}.html`), html);
   }
 

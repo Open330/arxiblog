@@ -27,6 +27,13 @@ export interface Post {
   content: string; // markdown body (with [[term]] annotation markers)
   persona: string;
   created_at: string;
+  // structured review (JSON arrays / text)
+  contributions: string; // JSON array
+  strengths: string; // JSON array
+  limitations: string; // JSON array
+  prerequisites: string; // JSON array
+  who_should_read: string; // text
+  suggested_questions: string; // JSON array
   // joined
   paper_title?: string;
   arxiv_id?: string;
@@ -67,6 +74,12 @@ CREATE TABLE IF NOT EXISTS posts (
   reading_minutes INTEGER NOT NULL DEFAULT 1,
   content TEXT NOT NULL DEFAULT '',
   persona TEXT DEFAULT '',
+  contributions TEXT DEFAULT '[]',
+  strengths TEXT DEFAULT '[]',
+  limitations TEXT DEFAULT '[]',
+  prerequisites TEXT DEFAULT '[]',
+  who_should_read TEXT DEFAULT '',
+  suggested_questions TEXT DEFAULT '[]',
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS annotations (
@@ -99,6 +112,17 @@ export class Store {
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec("PRAGMA foreign_keys=ON");
     this.db.exec(SCHEMA);
+    // Migrate existing DBs: add structured-review columns if missing.
+    for (const col of [
+      "contributions TEXT DEFAULT '[]'",
+      "strengths TEXT DEFAULT '[]'",
+      "limitations TEXT DEFAULT '[]'",
+      "prerequisites TEXT DEFAULT '[]'",
+      "who_should_read TEXT DEFAULT ''",
+      "suggested_questions TEXT DEFAULT '[]'",
+    ]) {
+      try { this.db.exec(`ALTER TABLE posts ADD COLUMN ${col}`); } catch { /* already exists */ }
+    }
   }
 
   close(): void {
@@ -143,6 +167,12 @@ export class Store {
     reading_minutes: number;
     content: string;
     persona: string;
+    contributions?: string[];
+    strengths?: string[];
+    limitations?: string[];
+    prerequisites?: string[];
+    who_should_read?: string;
+    suggested_questions?: string[];
   }): Post {
     // One post per paper: drop any stale post for this paper whose slug differs
     // (e.g. re-running `add` produced a slightly different title → new slug).
@@ -150,12 +180,16 @@ export class Store {
     this.db.prepare("DELETE FROM posts WHERE paper_id = ? AND slug <> ?").run(p.paper_id, p.slug);
     this.db
       .prepare(
-        `INSERT INTO posts (paper_id, slug, title, subtitle, tldr, takeaways, level, reading_minutes, content, persona)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO posts (paper_id, slug, title, subtitle, tldr, takeaways, level, reading_minutes, content, persona,
+            contributions, strengths, limitations, prerequisites, who_should_read, suggested_questions)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(slug) DO UPDATE SET
            paper_id=excluded.paper_id, title=excluded.title, subtitle=excluded.subtitle,
            tldr=excluded.tldr, takeaways=excluded.takeaways, level=excluded.level,
-           reading_minutes=excluded.reading_minutes, content=excluded.content, persona=excluded.persona`
+           reading_minutes=excluded.reading_minutes, content=excluded.content, persona=excluded.persona,
+           contributions=excluded.contributions, strengths=excluded.strengths, limitations=excluded.limitations,
+           prerequisites=excluded.prerequisites, who_should_read=excluded.who_should_read,
+           suggested_questions=excluded.suggested_questions`
       )
       .run(
         p.paper_id,
@@ -167,7 +201,13 @@ export class Store {
         p.level,
         p.reading_minutes,
         p.content,
-        p.persona
+        p.persona,
+        JSON.stringify(p.contributions ?? []),
+        JSON.stringify(p.strengths ?? []),
+        JSON.stringify(p.limitations ?? []),
+        JSON.stringify(p.prerequisites ?? []),
+        p.who_should_read ?? "",
+        JSON.stringify(p.suggested_questions ?? [])
       );
     return this.db.prepare("SELECT * FROM posts WHERE slug=?").get(p.slug) as Post;
   }

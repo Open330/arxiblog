@@ -59,9 +59,15 @@ export function renderPostPage(opts: {
   bodyHtml: string;
   toc: Array<{ level: number; text: string; id: string }>;
   annotations: Annotation[];
+  related?: Array<{ slug: string; title: string; arxiv_id?: string; reading_minutes?: number }>;
 }): string {
-  const { post, bodyHtml, toc, annotations } = opts;
+  const { post, bodyHtml, toc, annotations, related = [] } = opts;
   const takeaways = safeParseArray(post.takeaways);
+  const contributions = safeParseArray(post.contributions);
+  const strengths = safeParseArray(post.strengths);
+  const limitations = safeParseArray(post.limitations);
+  const prerequisites = safeParseArray(post.prerequisites);
+  const suggestedQuestions = safeParseArray(post.suggested_questions);
   const cats = (post.categories || "").split(",").map((c) => c.trim()).filter(Boolean);
   const absUrl = `https://arxiv.org/abs/${post.arxiv_id}`;
   const pdfUrl = `https://arxiv.org/pdf/${(post.arxiv_id || "").replace(/v\d+$/, "")}`;
@@ -83,6 +89,49 @@ export function renderPostPage(opts: {
     ? `<aside class="callout takeaways"><div class="callout-label">한눈에 보기</div><ul>${takeaways
         .map((t) => `<li>${escapeHtml(t)}</li>`)
         .join("")}</ul></aside>`
+    : "";
+
+  const reviewCol = (label: string, items: string[], cls: string) =>
+    items.length
+      ? `<div class="review-col ${cls}"><h3>${label}</h3><ul>${items
+          .map((t) => `<li>${escapeHtml(t)}</li>`)
+          .join("")}</ul></div>`
+      : "";
+  const reviewInner = [
+    reviewCol("핵심 기여", contributions, "rc-contrib"),
+    reviewCol("강점", strengths, "rc-strength"),
+    reviewCol("한계", limitations, "rc-limit"),
+    reviewCol("미리 알면 좋은 것", prerequisites, "rc-prereq"),
+  ].join("");
+  const reviewCard =
+    reviewInner || post.who_should_read
+      ? `<section class="review-card">
+          <div class="review-head">📋 한눈에 리뷰</div>
+          <div class="review-grid">${reviewInner}</div>
+          ${post.who_should_read ? `<div class="review-who">👤 ${escapeHtml(post.who_should_read)}</div>` : ""}
+        </section>`
+      : "";
+
+  const chips = suggestedQuestions.length
+    ? `<section class="ask-chips">
+        <div class="ask-chips-label">💬 이런 게 궁금하다면 — 눌러서 AI에게 물어보세요</div>
+        <div class="ask-chips-row">${suggestedQuestions
+          .map((q) => `<button class="ask-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
+          .join("")}</div>
+      </section>`
+    : "";
+
+  const relatedHtml = related.length
+    ? `<section class="related"><h2>관련 글</h2><div class="related-list">${related
+        .map(
+          (r) =>
+            `<a class="related-item" href="/p/${escapeHtml(r.slug)}.html"><span class="related-title">${escapeHtml(
+              r.title
+            )}</span><span class="related-meta">arXiv:${escapeHtml(r.arxiv_id || "")}${
+              r.reading_minutes ? " · " + r.reading_minutes + "분" : ""
+            }</span></a>`
+        )
+        .join("")}</div></section>`
     : "";
 
   const glossary = annotations.length
@@ -126,6 +175,8 @@ ${siteHeader()}
 
     ${tldrBox}
     ${takeawaysBox}
+    ${reviewCard}
+    ${chips}
     ${tocMobile}
 
     <div class="post-body">
@@ -133,6 +184,7 @@ ${siteHeader()}
     </div>
 
     ${glossary}
+    ${relatedHtml}
 
     <footer class="post-footer">
       이 글은 <a href="${absUrl}" target="_blank" rel="noopener">arXiv:${escapeHtml(post.arxiv_id || "")}</a> 논문을
@@ -173,7 +225,9 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
         .map((c) => c.trim())
         .filter(Boolean)
         .slice(0, 3);
-      return `<a class="card" href="/p/${escapeHtml(p.slug)}.html">
+      const haystack = `${p.title} ${p.subtitle} ${p.tldr} ${p.categories || ""} ${p.arxiv_id || ""}`
+        .toLowerCase();
+      return `<a class="card" href="/p/${escapeHtml(p.slug)}.html" data-search="${escapeHtml(haystack)}">
         <div class="card-meta">
           ${cats.map((c) => `<span class="cat">${escapeHtml(c)}</span>`).join("")}
           <span class="card-time">${p.reading_minutes}분</span>
@@ -207,10 +261,14 @@ ${siteHeader()}
     </div>
   </section>
   <section class="home-list">
-    <h2 class="home-list-title">${posts.length ? `글 ${posts.length}편` : "글"}</h2>
-    <div class="cards">
+    <div class="home-list-head">
+      <h2 class="home-list-title">${posts.length ? `글 ${posts.length}편` : "글"}</h2>
+      ${posts.length ? `<input id="post-search" class="post-search" type="search" placeholder="제목·요약·분야 검색…" autocomplete="off">` : ""}
+    </div>
+    <div class="cards" id="cards">
       ${posts.length ? cards : empty}
     </div>
+    <p id="search-empty" class="search-empty" hidden>검색 결과가 없습니다.</p>
   </section>
 </main>
 <footer class="site-footer">arxiblog · arXiv 논문을 사람의 언어로</footer>

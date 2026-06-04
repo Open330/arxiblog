@@ -11,6 +11,13 @@ export interface BlogResult {
   level: string;
   content: string; // markdown with [[term]] annotation markers
   annotations: Array<{ term: string; kind: string; explanation: string }>;
+  // structured review
+  contributions: string[];
+  strengths: string[];
+  limitations: string[];
+  prerequisites: string[];
+  who_should_read: string;
+  suggested_questions: string[];
 }
 
 /** Cap raw paper text so we stay within a reasonable token budget. */
@@ -65,6 +72,14 @@ flowchart TD
 
 [수식] 꼭 필요할 때만 LaTeX. 인라인 $...$, 블록 $$...$$. 쓰면 바로 말로도 풀어줍니다.
 
+[구조화 리뷰 — 본문과 별개로 채웁니다] 독자가 본문을 읽기 전/후에 빠르게 판단할 수 있도록, 아래를 간결한 한국어로 채웁니다. 본문 내용과 일치해야 하며 지어내지 않습니다.
+- contributions: 이 논문의 핵심 기여 2~4개 (각 한 줄).
+- strengths: 인상적인 점·강점 2~3개 (각 한 줄).
+- limitations: 솔직한 한계·주의점 2~3개 (각 한 줄). 논문이 안 밝혔으면 합리적으로 추론하되 단정하지 않습니다.
+- prerequisites: 이 글을 더 잘 읽기 위해 알면 좋은 선행 개념 2~4개 (각 짧은 구).
+- who_should_read: "이런 분께 추천" 한 문장.
+- suggested_questions: 독자가 던질 법한 좋은 질문 3개 (각 한 줄, 챗에 바로 쓸 수 있게).
+
 [출력 형식] 아래 JSON 객체 하나만. 코드펜스 없이 JSON만.
 {
   "title": "사람이 쓴 듯한, 클릭하고 싶은 한국어 제목 (과장 금지)",
@@ -74,7 +89,13 @@ flowchart TD
   "content": "## 들어가며\\n\\n...마크다운 본문 (흐르는 문단 중심, [[용어]] 주석과 필요시 mermaid 포함)...",
   "annotations": [
     { "term": "용어", "kind": "jargon", "explanation": "비전공자용 1~2문장 해설" }
-  ]
+  ],
+  "contributions": ["기여 1", "기여 2"],
+  "strengths": ["강점 1", "강점 2"],
+  "limitations": ["한계 1", "한계 2"],
+  "prerequisites": ["선행 개념 1", "선행 개념 2"],
+  "who_should_read": "이런 분께 추천: ...",
+  "suggested_questions": ["질문 1", "질문 2", "질문 3"]
 }
 content 안의 mermaid 코드펜스 줄바꿈은 \\n 으로 정확히 이스케이프하세요. kind 값: "jargon" | "concept" | "context" | "math".`;
 }
@@ -124,15 +145,24 @@ export async function transformToBlog(
     .filter((a) => a && a.term && a.explanation)
     .map((a) => ({ term: a.term.trim(), kind: a.kind || "jargon", explanation: a.explanation.trim() }));
 
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter(Boolean).map((x) => String(x).trim()).filter(Boolean) : [];
+
   const title = (parsed.title || meta.title).trim();
   return {
     title,
     subtitle: (parsed.subtitle || "").trim(),
     tldr: (parsed.tldr || "").trim(),
-    takeaways: Array.isArray(parsed.takeaways) ? parsed.takeaways.filter(Boolean).map(String) : [],
+    takeaways: strArr(parsed.takeaways),
     level,
     content,
     annotations,
+    contributions: strArr(parsed.contributions),
+    strengths: strArr(parsed.strengths),
+    limitations: strArr(parsed.limitations),
+    prerequisites: strArr(parsed.prerequisites),
+    who_should_read: (parsed.who_should_read || "").trim(),
+    suggested_questions: strArr(parsed.suggested_questions).slice(0, 5),
   };
 }
 

@@ -106,50 +106,118 @@
     return div;
   }
 
+  let busy = false;
+  async function send(q) {
+    q = (q || "").trim();
+    if (!q || busy) return;
+    busy = true;
+    addMsg("user", q);
+    history.push({ role: "user", content: q });
+    const typing = addMsg("bot", "…");
+    typing.classList.add("chat-typing");
+    const btn = form && form.querySelector("button");
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
+      });
+      if (!resp.ok) {
+        let serverMsg = "";
+        try { const ej = await resp.json(); serverMsg = ej.error || ej.answer || ""; } catch (e2) {}
+        typing.classList.remove("chat-typing");
+        typing.textContent =
+          serverMsg ||
+          (resp.status === 404
+            ? "채팅은 로컬 `arxiblog serve` 모드에서만 동작합니다."
+            : "오류가 발생했습니다 (" + resp.status + ").");
+        return;
+      }
+      const data = await resp.json();
+      const answer = (data && data.answer) || "답변을 생성하지 못했습니다.";
+      typing.classList.remove("chat-typing");
+      typing.textContent = answer;
+      history.push({ role: "assistant", content: answer });
+    } catch (err) {
+      typing.classList.remove("chat-typing");
+      typing.textContent = "연결할 수 없습니다. `arxiblog serve` 로 실행 중인지 확인하세요.";
+    } finally {
+      busy = false;
+      if (btn) btn.disabled = false;
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
   if (form) {
-    form.addEventListener("submit", async function (e) {
+    form.addEventListener("submit", function (e) {
       e.preventDefault();
       const q = (input.value || "").trim();
       if (!q) return;
       input.value = "";
       input.style.height = "auto";
-      addMsg("user", q);
-      history.push({ role: "user", content: q });
+      send(q);
+    });
+  }
 
-      const typing = addMsg("bot", "…");
-      typing.classList.add("chat-typing");
-      const btn = form.querySelector("button");
-      if (btn) btn.disabled = true;
+  // Suggested-question chips → open chat and ask
+  document.querySelectorAll(".ask-chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      openChat();
+      send(chip.getAttribute("data-q"));
+    });
+  });
 
-      try {
-        const resp = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
-        });
-        if (!resp.ok) {
-          var serverMsg = "";
-          try { var ej = await resp.json(); serverMsg = ej.error || ej.answer || ""; } catch (e2) {}
-          typing.classList.remove("chat-typing");
-          typing.textContent =
-            serverMsg ||
-            (resp.status === 404
-              ? "채팅은 로컬 `arxiblog serve` 모드에서만 동작합니다."
-              : "오류가 발생했습니다 (" + resp.status + ").");
-          return;
-        }
-        const data = await resp.json();
-        const answer = (data && data.answer) || "답변을 생성하지 못했습니다.";
-        typing.classList.remove("chat-typing");
-        typing.textContent = answer;
-        history.push({ role: "assistant", content: answer });
-      } catch (err) {
-        typing.classList.remove("chat-typing");
-        typing.textContent = "연결할 수 없습니다. `arxiblog serve` 로 실행 중인지 확인하세요.";
-      } finally {
-        if (btn) btn.disabled = false;
-        log.scrollTop = log.scrollHeight;
+  // ── Select-to-ask: highlight text in the post → floating "ask" button ──
+  const postBody = document.querySelector(".post-body");
+  if (postBody && form) {
+    const askBtn = document.createElement("button");
+    askBtn.className = "select-ask";
+    askBtn.textContent = "🤔 이 부분 물어보기";
+    askBtn.hidden = true;
+    document.body.appendChild(askBtn);
+    let selectedText = "";
+
+    const hideAsk = () => { askBtn.hidden = true; };
+    document.addEventListener("selectionchange", function () {
+      const sel = document.getSelection();
+      if (!sel || sel.isCollapsed) { hideAsk(); return; }
+      const text = sel.toString().trim();
+      const anchor = sel.anchorNode;
+      if (text.length < 8 || text.length > 600 || !anchor || !postBody.contains(anchor.parentNode)) {
+        hideAsk();
+        return;
       }
+      selectedText = text;
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      askBtn.style.top = window.scrollY + rect.top - 44 + "px";
+      askBtn.style.left = window.scrollX + rect.left + rect.width / 2 + "px";
+      askBtn.hidden = false;
+    });
+    askBtn.addEventListener("mousedown", function (e) { e.preventDefault(); });
+    askBtn.addEventListener("click", function () {
+      hideAsk();
+      openChat();
+      send('이 부분을 쉽게 풀어서 설명해줘:\n"' + selectedText + '"');
+      const sel = document.getSelection(); if (sel) sel.removeAllRanges();
+    });
+    document.addEventListener("scroll", hideAsk, { passive: true });
+  }
+
+  // ── Home search: filter cards ──
+  const search = document.getElementById("post-search");
+  if (search) {
+    const cards = Array.from(document.querySelectorAll("#cards .card"));
+    const emptyMsg = document.getElementById("search-empty");
+    search.addEventListener("input", function () {
+      const q = search.value.trim().toLowerCase();
+      let shown = 0;
+      cards.forEach(function (c) {
+        const hit = !q || (c.getAttribute("data-search") || "").includes(q);
+        c.style.display = hit ? "" : "none";
+        if (hit) shown++;
+      });
+      if (emptyMsg) emptyMsg.hidden = shown !== 0;
     });
   }
 })();

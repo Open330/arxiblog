@@ -77,6 +77,12 @@ export async function addPaper(
     reading_minutes: minutes,
     content: blog.content,
     persona: persona.name,
+    contributions: blog.contributions,
+    strengths: blog.strengths,
+    limitations: blog.limitations,
+    prerequisites: blog.prerequisites,
+    who_should_read: blog.who_should_read,
+    suggested_questions: blog.suggested_questions,
   });
   store.replaceAnnotations(post.id, blog.annotations);
 
