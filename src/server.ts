@@ -1,6 +1,6 @@
 import { join, normalize, extname, sep } from "path";
 import { existsSync, statSync } from "fs";
-import { DB_FILE, loadConfig, saveConfig } from "./config";
+import { DB_FILE, loadConfig, saveConfig, DEFAULT_CHAT } from "./config";
 import { Store } from "./store";
 import { LLMClient } from "./llm-client";
 import { answerQuestion, type ChatTurn } from "./pipeline/chat";
@@ -19,6 +19,43 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
 };
+
+/**
+ * In-memory sliding-window rate limiter for the public chat endpoint.
+ * Guards both per-IP abuse and a global daily cap (to protect the LLM free quota).
+ */
+function makeChatLimiter(perIpPerHour: number, globalPerDay: number) {
+  const ipHits = new Map<string, number[]>();
+  let day = Math.floor(Date.now() / 86_400_000);
+  let dayCount = 0;
+  return function check(ip: string): { ok: boolean; reason?: string } {
+    const now = Date.now();
+    const today = Math.floor(now / 86_400_000);
+    if (today !== day) { day = today; dayCount = 0; ipHits.clear(); }
+    if (globalPerDay > 0 && dayCount >= globalPerDay) {
+      return { ok: false, reason: "오늘 전체 챗 사용량 한도에 도달했어요. 내일 다시 시도해 주세요." };
+    }
+    const recent = (ipHits.get(ip) || []).filter((t) => now - t < 3_600_000);
+    if (perIpPerHour > 0 && recent.length >= perIpPerHour) {
+      return { ok: false, reason: "잠시 후 다시 시도해 주세요. (시간당 질문 한도를 초과했어요)" };
+    }
+    recent.push(now);
+    ipHits.set(ip, recent);
+    dayCount++;
+    // opportunistic cleanup so the map doesn't grow unbounded
+    if (ipHits.size > 5000) for (const [k, v] of ipHits) if (!v.some((t) => now - t < 3_600_000)) ipHits.delete(k);
+    return { ok: true };
+  };
+}
+
+function clientIp(req: Request, server: { requestIP?: (r: Request) => { address: string } | null } | undefined): string {
+  return (
+    req.headers.get("cf-connecting-ip") ||
+    (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
+    server?.requestIP?.(req)?.address ||
+    "unknown"
+  );
+}
 
 function safeJoin(root: string, urlPath: string): string | null {
   let decoded: string;
@@ -39,6 +76,9 @@ export function startServer(projectRoot: string, port: number, host = "localhost
   const store = new Store(join(projectRoot, DB_FILE));
   const adminToken = crypto.randomUUID().replace(/-/g, "");
 
+  const chatCfg = { ...DEFAULT_CHAT, ...(initialConfig.chat || {}) };
+  const chatLimiter = makeChatLimiter(chatCfg.per_ip_per_hour, chatCfg.global_per_day);
+
   // Serialize add/settings/delete so concurrent writes + rebuilds don't race.
   let writeChain: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -58,7 +98,7 @@ export function startServer(projectRoot: string, port: number, host = "localhost
     port,
     hostname: host,
     idleTimeout: 255, // allow long LLM calls during /api/add
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
 
@@ -70,7 +110,14 @@ export function startServer(projectRoot: string, port: number, host = "localhost
       }
 
       // ── Public read APIs ──
-      if (path === "/api/chat" && req.method === "POST") return handleChat(req, projectRoot, store);
+      if (path === "/api/chat" && req.method === "POST") {
+        if (!chatCfg.enabled) {
+          return Response.json({ answer: "이 사이트에서는 AI 챗이 꺼져 있어요." }, { status: 200 });
+        }
+        const gate = chatLimiter(clientIp(req, server));
+        if (!gate.ok) return Response.json({ error: gate.reason }, { status: 429 });
+        return handleChat(req, projectRoot, store);
+      }
       if (path === "/api/posts" && req.method === "GET") {
         return Response.json({
           posts: store.listPosts().map((p) => ({

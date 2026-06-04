@@ -128,11 +128,14 @@
           body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
         });
         if (!resp.ok) {
+          var serverMsg = "";
+          try { var ej = await resp.json(); serverMsg = ej.error || ej.answer || ""; } catch (e2) {}
           typing.classList.remove("chat-typing");
           typing.textContent =
-            resp.status === 404
+            serverMsg ||
+            (resp.status === 404
               ? "채팅은 로컬 `arxiblog serve` 모드에서만 동작합니다."
-              : "오류가 발생했습니다 (" + resp.status + ").";
+              : "오류가 발생했습니다 (" + resp.status + ").");
           return;
         }
         const data = await resp.json();

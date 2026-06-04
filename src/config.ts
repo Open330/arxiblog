@@ -24,6 +24,13 @@ export interface Persona {
   style: string; // tone & formatting guidance injected into the prompt
 }
 
+/** Rate-limit settings for the public AI chat endpoint. */
+export interface ChatConfig {
+  enabled?: boolean; // false → chat endpoint returns a disabled message
+  per_ip_per_hour?: number; // 0 = unlimited
+  global_per_day?: number; // 0 = unlimited; protects the LLM free-tier quota
+}
+
 export interface ArxiblogConfig {
   project: { name: string; created: string; tagline?: string };
   build: { output_dir: string };
@@ -33,7 +40,14 @@ export interface ArxiblogConfig {
   active_persona?: string;
   /** Default reading level for new posts: "beginner" | "intermediate" */
   default_level?: string;
+  chat?: ChatConfig;
 }
+
+export const DEFAULT_CHAT: Required<ChatConfig> = {
+  enabled: true,
+  per_ip_per_hour: 30,
+  global_per_day: 800,
+};
 
 function getPersonasDir(): string {
   // personas/ lives at the package root, one level above src/
@@ -83,6 +97,7 @@ export function defaultConfig(name: string): ArxiblogConfig {
     personas,
     active_persona: pickDefaultPersonaName(personas),
     default_level: "beginner",
+    chat: { ...DEFAULT_CHAT },
   };
 }
 
@@ -108,6 +123,7 @@ export function saveConfig(root: string, config: ArxiblogConfig): void {
   ordered.build = config.build;
   ordered.llm = config.llm;
   ordered.deploy = config.deploy;
+  if (config.chat) ordered.chat = config.chat;
   if (config.personas) ordered.personas = config.personas;
   Bun.write(join(root, CONFIG_FILE), stringify(ordered));
 }
