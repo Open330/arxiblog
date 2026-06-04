@@ -1,5 +1,5 @@
 import type { ArxiblogConfig } from "../config";
-import { getActivePersona } from "../config";
+import { getActivePersona, hasLlmKey } from "../config";
 import type { Store } from "../store";
 import { LLMClient, type UsageStats } from "../llm-client";
 import { parseArxivId, fetchArxivMeta, fetchArxivFullText } from "../ingest/arxiv";
@@ -33,7 +33,7 @@ export async function addPaper(
   source: string,
   opts: AddOptions = {}
 ): Promise<AddResult> {
-  if (!config.llm.api_key) throw new Error("LLM API 키가 설정되지 않았습니다.");
+  if (!hasLlmKey(config.llm)) throw new Error("LLM API 키가 설정되지 않았습니다.");
 
   const cfg = opts.persona ? { ...config, active_persona: opts.persona } : config;
   const persona = getActivePersona(cfg);

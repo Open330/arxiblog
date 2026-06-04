@@ -16,15 +16,16 @@ type ProviderResult = {
 // ── Provider: Google Gemini (raw fetch, no SDK needed) ──
 
 async function geminiComplete(
-  config: LLMConfig,
+  apiKey: string,
+  model: string,
   system: string,
   userMessage: string,
   maxTokens: number
 ): Promise<ProviderResult> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": config.api_key },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ parts: [{ text: userMessage }] }],
@@ -64,6 +65,13 @@ function isRetryableError(error: unknown): boolean {
   return false;
 }
 
+/** Quota/rate-limit error → try the next Gemini key rather than waiting. */
+function isQuotaError(error: unknown): boolean {
+  if (error instanceof Error && (/\b429\b/.test(error.message) || /RESOURCE_EXHAUSTED|quota/i.test(error.message)))
+    return true;
+  return (error as { status?: number })?.status === 429;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -77,8 +85,54 @@ export class LLMClient {
 
   onRetry?: (attempt: number, maxRetries: number, delayMs: number) => void;
 
+  // Gemini key pool: free keys rotated round-robin, paid key as last resort.
+  private geminiFree: string[] = [];
+  private geminiPaid = "";
+  private rr = 0;
+  private cooldown = new Map<string, number>(); // key → epoch ms until usable again
+
   constructor(config: LLMConfig) {
     this.config = config;
+    const free = [...(config.api_keys || []), ...(config.api_key ? [config.api_key] : [])];
+    // de-dup while preserving order
+    this.geminiFree = [...new Set(free.filter(Boolean))];
+    this.geminiPaid = config.api_key_paid || "";
+  }
+
+  /** Gemini call with free-key rotation and paid fallback on quota exhaustion. */
+  private async geminiWithFallback(system: string, user: string, maxTokens: number): Promise<ProviderResult> {
+    const now = Date.now();
+    const n = this.geminiFree.length;
+    const candidates: Array<{ key: string; paid: boolean }> = [];
+    for (let i = 0; i < n; i++) candidates.push({ key: this.geminiFree[(this.rr + i) % n], paid: false });
+    if (this.geminiPaid) candidates.push({ key: this.geminiPaid, paid: true });
+    if (n > 0) this.rr = (this.rr + 1) % n; // spread load across calls
+
+    if (candidates.length === 0) throw new Error("Gemini API 키가 설정되지 않았습니다.");
+
+    let lastErr: unknown;
+    let triedAny = false;
+    for (const { key, paid } of candidates) {
+      if (!paid && (this.cooldown.get(key) || 0) > now) continue; // skip cooling free keys
+      triedAny = true;
+      try {
+        return await geminiComplete(key, this.config.model, system, user, maxTokens);
+      } catch (e) {
+        lastErr = e;
+        if (isQuotaError(e)) {
+          this.cooldown.set(key, Date.now() + 60_000); // rest this key for 60s
+          continue; // → next key (eventually the paid fallback)
+        }
+        if (isRetryableError(e)) continue; // transient (500/503) → try next key
+        throw e; // non-retryable (e.g. 400) → bubble up
+      }
+    }
+    if (!triedAny) {
+      // every free key is cooling and no paid key — wait briefly on the first key
+      await sleep(2000);
+      return geminiComplete(this.geminiFree[0], this.config.model, system, user, maxTokens);
+    }
+    throw lastErr || new Error("모든 Gemini 키가 소진되었습니다.");
   }
 
   private async azureComplete(system: string, userMessage: string, maxTokens: number): Promise<ProviderResult> {
@@ -169,7 +223,7 @@ export class LLMClient {
         let result: ProviderResult;
         switch (this.config.provider) {
           case "gemini":
-            result = await geminiComplete(this.config, system, userMessage, maxTokens);
+            result = await this.geminiWithFallback(system, userMessage, maxTokens);
             break;
           case "azure-openai":
             result = await this.azureComplete(system, userMessage, maxTokens);

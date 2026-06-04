@@ -11,6 +11,15 @@ export interface LLMConfig {
   model: string;
   api_key: string;
   endpoint: string; // for Azure OpenAI
+  /** Gemini free-tier key pool — rotated round-robin (무료 키 풀). */
+  api_keys?: string[];
+  /** Gemini paid fallback key, used when the free pool is rate-limited (유료 fallback). */
+  api_key_paid?: string;
+}
+
+/** True if any usable LLM key is configured (single, pool, or paid fallback). */
+export function hasLlmKey(c: LLMConfig): boolean {
+  return !!(c.api_key || (c.api_keys && c.api_keys.length) || c.api_key_paid);
 }
 
 /**

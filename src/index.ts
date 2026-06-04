@@ -103,7 +103,8 @@ program
     const root = findProjectRoot();
     const config = loadConfig(root);
 
-    if (!config.llm.api_key) {
+    const { hasLlmKey } = await import("./config");
+    if (!hasLlmKey(config.llm)) {
       console.log(C.red("LLM API 키가 설정되지 않았습니다. arxiblog.toml의 [llm] api_key를 채워주세요."));
       process.exit(1);
     }

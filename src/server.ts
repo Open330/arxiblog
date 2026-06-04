@@ -1,6 +1,6 @@
 import { join, normalize, extname, sep } from "path";
 import { existsSync, statSync } from "fs";
-import { DB_FILE, loadConfig, saveConfig, DEFAULT_CHAT } from "./config";
+import { DB_FILE, loadConfig, saveConfig, DEFAULT_CHAT, hasLlmKey } from "./config";
 import { Store } from "./store";
 import { LLMClient } from "./llm-client";
 import { answerQuestion, type ChatTurn } from "./pipeline/chat";
@@ -133,7 +133,8 @@ export function startServer(projectRoot: string, port: number, host = "localhost
         const c = loadConfig(projectRoot);
         return Response.json({
           provider: c.llm.provider, model: c.llm.model, endpoint: c.llm.endpoint,
-          hasKey: !!c.llm.api_key, active_persona: c.active_persona, default_level: c.default_level,
+          hasKey: hasLlmKey(c.llm), keyPool: (c.llm.api_keys || []).length, hasPaid: !!c.llm.api_key_paid,
+          active_persona: c.active_persona, default_level: c.default_level,
           personas: (c.personas || []).map((p) => ({ name: p.name, description: p.description })),
         });
       }
@@ -184,7 +185,7 @@ async function handleChat(req: Request, projectRoot: string, store: Store): Prom
     if (!slug || !question) return Response.json({ error: "slug과 question이 필요합니다." }, { status: 400 });
 
     const config = loadConfig(projectRoot);
-    if (!config.llm.api_key || config.llm.provider === "demo") {
+    if (!hasLlmKey(config.llm) || config.llm.provider === "demo") {
       return Response.json(
         { answer: "LLM API 키가 설정되어 있지 않아 채팅을 사용할 수 없어요. 관리 페이지에서 키를 넣어주세요." },
         { status: 200 }
@@ -208,7 +209,7 @@ async function handleAdd(req: Request, projectRoot: string, store: Store): Promi
     const source = (body.source || "").trim();
     if (!source) return Response.json({ error: "arXiv ID 또는 URL이 필요합니다." }, { status: 400 });
     const config = loadConfig(projectRoot);
-    if (!config.llm.api_key) return Response.json({ error: "LLM API 키가 설정되지 않았습니다." }, { status: 400 });
+    if (!hasLlmKey(config.llm)) return Response.json({ error: "LLM API 키가 설정되지 않았습니다." }, { status: 400 });
 
     const result = await addPaper(store, config, source, { level: body.level, persona: body.persona });
     await buildSite(store, config, projectRoot);
