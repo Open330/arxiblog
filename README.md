@@ -7,9 +7,31 @@
 arXiv 논문 하나를 넣으면 — LLM이 학계 사람이 아니어도 술술 읽히는 "논문 읽기 블로그" 글로 바꿔줍니다.
 전문용어엔 자동 주석, 흐름엔 **mermaid 도식**, 읽다 막히면 옆의 **AI 챗**. 웹 관리 페이지에서 논문 추가·설정까지.
 
-`Bun` · `TypeScript` · `MIT`
+`Bun` · `TypeScript` · `MIT` · [라이브 데모](https://arxiblog.jiun.dev)
 
 </div>
+
+---
+
+## 미리보기
+
+<div align="center">
+
+|  홈  |  논문 읽기 블로그  |
+|:----:|:------------------:|
+| <img src="assets/screenshots/home.png" width="420"> | <img src="assets/screenshots/post.png" width="420"> |
+
+</div>
+
+<table>
+<tr>
+<td width="33%"><b>용어 주석</b><br>밑줄 위에 마우스 → 팝오버 + 글 하단 용어집<br><img src="assets/screenshots/annotation.png"></td>
+<td width="33%"><b>mermaid 도식</b><br>구조·흐름을 다이어그램으로 자동 시각화<br><img src="assets/screenshots/diagram.png"></td>
+<td width="33%"><b>AI 챗</b><br>논문·글 맥락 기반 Q&A (드래그-질문·추천 질문)<br><img src="assets/screenshots/chat.png"></td>
+</tr>
+</table>
+
+> 위 스크린샷은 [arxiblog.jiun.dev](https://arxiblog.jiun.dev)에 실제로 추가된 논문들 (Attention Is All You Need, ViT, BERT, GAN 등)에서 캡처했습니다.
 
 ---
 

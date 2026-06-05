@@ -172,6 +172,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 6px; font-si
 .chat-toggle { position: fixed; right: 24px; bottom: 24px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 13px 22px; font: inherit; font-size: .95rem; font-weight: 700; cursor: pointer; box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 45%, transparent); }
 .chat-toggle:hover { filter: brightness(1.07); transform: translateY(-1px); }
 .chat-panel { position: fixed; right: 0; top: 0; bottom: 0; width: min(440px, 100vw); z-index: 60; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: -10px 0 40px rgba(0,0,0,.18); animation: slidein .22s ease; }
+.chat-panel[hidden] { display: none; } /* override display:flex so the `hidden` attr truly hides the panel */
 @keyframes slidein { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
 .chat-close { background: none; border: none; font-size: 1.05rem; cursor: pointer; color: var(--muted); }
