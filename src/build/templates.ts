@@ -20,6 +20,7 @@ function head(title: string, description: string): string {
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:type" content="article">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
@@ -273,6 +274,21 @@ ${siteHeader()}
 </main>
 <footer class="site-footer">arxiblog · arXiv 논문을 사람의 언어로</footer>
 <script defer src="/static/app.js"></script>
+</body>
+</html>`;
+}
+
+// ── 404 page ──
+
+export function renderNotFoundPage(config: ArxiblogConfig): string {
+  return `${head("404 · " + config.project.name, "페이지를 찾을 수 없습니다")}
+<body>
+${siteHeader()}
+<main class="notfound">
+  <div class="notfound-code">404</div>
+  <p>찾으시는 페이지가 없습니다.</p>
+  <p><a href="/">← 홈으로 돌아가기</a></p>
+</main>
 </body>
 </html>`;
 }

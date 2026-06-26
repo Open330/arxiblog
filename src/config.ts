@@ -41,7 +41,7 @@ export interface ChatConfig {
 }
 
 export interface ArxiblogConfig {
-  project: { name: string; created: string; tagline?: string };
+  project: { name: string; created: string; tagline?: string; url?: string };
   build: { output_dir: string };
   llm: LLMConfig;
   deploy: { target: string };

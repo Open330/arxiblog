@@ -274,3 +274,8 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 6px; font-si
 .post-search { font: inherit; font-size: .92rem; padding: 9px 14px; min-width: 240px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); }
 .post-search:focus { outline: none; border-color: var(--accent); }
 .search-empty { color: var(--muted); text-align: center; padding: 40px 0; }
+
+/* ── 404 ── */
+.notfound { max-width: 600px; margin: 0 auto; padding: 120px 24px; text-align: center; color: var(--muted); }
+.notfound-code { font-size: 5rem; font-weight: 800; letter-spacing: -.04em; color: var(--accent); line-height: 1; margin-bottom: 12px; }
+.notfound p { margin: 8px 0; font-size: 1.05rem; }

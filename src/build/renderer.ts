@@ -4,7 +4,7 @@ import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 import type { ArxiblogConfig } from "../config";
 import type { Store, Post, Annotation } from "../store";
-import { renderPostPage, renderIndexPage } from "./templates";
+import { renderPostPage, renderIndexPage, renderNotFoundPage } from "./templates";
 import { escapeHtml } from "../utils";
 
 function normalizeTerm(s: string): string {
@@ -208,6 +208,31 @@ export async function buildSite(store: Store, config: ArxiblogConfig, projectRoo
       }))
     )
   );
+
+  // 404 page (GitHub Pages serves /404.html; serve mode also uses it)
+  await Bun.write(join(outputDir, "404.html"), renderNotFoundPage(config));
+
+  // Favicon — a self-contained SVG mark (no external asset)
+  const favicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#4f46e5"/>
+  <text x="32" y="44" font-family="-apple-system,Segoe UI,sans-serif" font-size="38" font-weight="800" fill="#fff" text-anchor="middle">a</text>
+</svg>`;
+  await Bun.write(join(outputDir, "favicon.svg"), favicon);
+
+  // robots.txt + sitemap.xml (sitemap only when an absolute site URL is configured)
+  const siteUrl = (config.project.url || "").replace(/\/$/, "");
+  await Bun.write(
+    join(outputDir, "robots.txt"),
+    `User-agent: *\nAllow: /\n${siteUrl ? `Sitemap: ${siteUrl}/sitemap.xml\n` : ""}`
+  );
+  if (siteUrl) {
+    const urls = [`${siteUrl}/`, ...posts.map((p) => `${siteUrl}/p/${encodeURIComponent(p.slug)}.html`)];
+    const sitemap =
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls.map((u) => `  <url><loc>${u}</loc></url>`).join("\n") +
+      `\n</urlset>\n`;
+    await Bun.write(join(outputDir, "sitemap.xml"), sitemap);
+  }
 
   return posts.length;
 }

@@ -160,7 +160,16 @@ export function startServer(projectRoot: string, port: number, host = "localhost
       } else if (!existsSync(filePath) && !extname(filePath)) {
         if (existsSync(filePath + ".html")) filePath += ".html";
       }
-      if (!existsSync(filePath)) return new Response("Not found", { status: 404 });
+      if (!existsSync(filePath)) {
+        const notFound = join(siteDir, "404.html");
+        if (existsSync(notFound)) {
+          return new Response(Bun.file(notFound), {
+            status: 404,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      }
       return new Response(Bun.file(filePath), {
         headers: { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" },
       });
