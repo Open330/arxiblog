@@ -19,15 +19,15 @@ arXiv 논문 하나를 넣으면 — LLM이 학계 사람이 아니어도 술술
 
 |  홈  |  논문 읽기 블로그  |
 |:----:|:------------------:|
-| <img src="assets/screenshots/home.png" width="420"> | <img src="assets/screenshots/post.png" width="420"> |
+| <img src="https://raw.githubusercontent.com/Open330/arxiblog/master/assets/screenshots/home.png" width="420"> | <img src="https://raw.githubusercontent.com/Open330/arxiblog/master/assets/screenshots/post.png" width="420"> |
 
 </div>
 
 <table>
 <tr>
-<td width="33%"><b>용어 주석</b><br>밑줄 위에 마우스 → 팝오버 + 글 하단 용어집<br><img src="assets/screenshots/annotation.png"></td>
-<td width="33%"><b>mermaid 도식</b><br>구조·흐름을 다이어그램으로 자동 시각화<br><img src="assets/screenshots/diagram.png"></td>
-<td width="33%"><b>AI 챗</b><br>논문·글 맥락 기반 Q&A (드래그-질문·추천 질문)<br><img src="assets/screenshots/chat.png"></td>
+<td width="33%"><b>용어 주석</b><br>밑줄 위에 마우스 → 팝오버 + 글 하단 용어집<br><img src="https://raw.githubusercontent.com/Open330/arxiblog/master/assets/screenshots/annotation.png"></td>
+<td width="33%"><b>mermaid 도식</b><br>구조·흐름을 다이어그램으로 자동 시각화<br><img src="https://raw.githubusercontent.com/Open330/arxiblog/master/assets/screenshots/diagram.png"></td>
+<td width="33%"><b>AI 챗</b><br>논문·글 맥락 기반 Q&A (드래그-질문·추천 질문)<br><img src="https://raw.githubusercontent.com/Open330/arxiblog/master/assets/screenshots/chat.png"></td>
 </tr>
 </table>
 
