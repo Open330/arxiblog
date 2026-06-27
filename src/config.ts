@@ -17,9 +17,14 @@ export interface LLMConfig {
   api_key_paid?: string;
 }
 
-/** True if any usable LLM key is configured (single, pool, or paid fallback). */
+/** True if a usable LLM key is configured for the *selected* provider. */
 export function hasLlmKey(c: LLMConfig): boolean {
-  return !!(c.api_key || (c.api_keys && c.api_keys.length) || c.api_key_paid);
+  if (c.provider === "gemini") {
+    // Gemini supports a free-key pool and/or a paid fallback in addition to api_key.
+    return !!(c.api_key || (c.api_keys && c.api_keys.length) || c.api_key_paid);
+  }
+  // openai / anthropic / azure-openai authenticate with a single api_key.
+  return !!c.api_key;
 }
 
 /**
@@ -38,6 +43,9 @@ export interface ChatConfig {
   enabled?: boolean; // false → chat endpoint returns a disabled message
   per_ip_per_hour?: number; // 0 = unlimited
   global_per_day?: number; // 0 = unlimited; protects the LLM free-tier quota
+  /** Trust CF-Connecting-IP / X-Forwarded-For for the client IP. Enable ONLY when
+   * behind a trusted proxy (e.g. Cloudflare); otherwise clients can spoof per-IP limits. */
+  trust_proxy?: boolean;
 }
 
 export interface ArxiblogConfig {
@@ -56,6 +64,7 @@ export const DEFAULT_CHAT: Required<ChatConfig> = {
   enabled: true,
   per_ip_per_hour: 30,
   global_per_day: 800,
+  trust_proxy: false,
 };
 
 function getPersonasDir(): string {

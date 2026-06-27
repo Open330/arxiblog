@@ -5,7 +5,7 @@ import sanitizeHtml from "sanitize-html";
 import type { ArxiblogConfig } from "../config";
 import type { Store, Post, Annotation } from "../store";
 import { renderPostPage, renderIndexPage, renderNotFoundPage } from "./templates";
-import { escapeHtml } from "../utils";
+import { escapeHtml, splitCategories } from "../utils";
 
 function normalizeTerm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -117,9 +117,12 @@ export async function renderPostBody(content: string, annotations: Annotation[])
 export function generateToc(markdown: string): Array<{ level: number; text: string; id: string }> {
   const headings: Array<{ level: number; text: string; id: string }> = [];
   const seen = new Map<string, number>();
+  // Strip fenced code/mermaid blocks first: a `##` line inside a fence is NOT a heading,
+  // and counting it would desync injectHeadingIds' positional id assignment.
+  const scanned = markdown.replace(/```[\s\S]*?```/g, "");
   const re = /^(#{2,3})\s+(.+)$/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(markdown)) !== null) {
+  while ((m = re.exec(scanned)) !== null) {
     const text = m[2].replace(/\[\[([^\]|]+?)\]\]/g, "$1").trim();
     let id = slugifyHeading(text) || "section";
     const n = seen.get(id) ?? 0;
@@ -162,8 +165,9 @@ export async function buildSite(store: Store, config: ArxiblogConfig, projectRoo
   if (existsSync(assetsDir)) cpSync(assetsDir, staticDir, { recursive: true });
 
   const posts = store.listPosts();
-  const catsOf = (p: { categories?: string }) =>
-    new Set((p.categories || "").split(",").map((c) => c.trim()).filter(Boolean));
+  // Precompute each post's category Set once (avoids O(n^2) re-splitting in the loop).
+  const catSets = new Map<string, Set<string>>();
+  for (const p of posts) catSets.set(p.slug, new Set(splitCategories(p.categories)));
 
   for (const post of posts) {
     const annotations = store.getAnnotations(post.id);
@@ -171,10 +175,10 @@ export async function buildSite(store: Store, config: ArxiblogConfig, projectRoo
     const bodyHtml = injectHeadingIds(await renderPostBody(post.content, annotations), toc);
 
     // Related: other posts sharing the most arXiv categories (fallback: most recent).
-    const mine = catsOf(post);
+    const mine = catSets.get(post.slug)!;
     const related = posts
       .filter((p) => p.slug !== post.slug)
-      .map((p) => ({ p, overlap: [...catsOf(p)].filter((c) => mine.has(c)).length }))
+      .map((p) => ({ p, overlap: [...catSets.get(p.slug)!].filter((c) => mine.has(c)).length }))
       .sort((a, b) => b.overlap - a.overlap)
       .slice(0, 3)
       .filter((x) => x.overlap > 0 || posts.length <= 4)

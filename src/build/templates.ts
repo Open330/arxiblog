@@ -1,6 +1,6 @@
 import type { ArxiblogConfig } from "../config";
 import type { Post, Annotation } from "../store";
-import { escapeHtml } from "../utils";
+import { escapeHtml, splitCategories } from "../utils";
 
 const KIND_LABEL: Record<string, string> = {
   jargon: "전문용어",
@@ -69,7 +69,7 @@ export function renderPostPage(opts: {
   const limitations = safeParseArray(post.limitations);
   const prerequisites = safeParseArray(post.prerequisites);
   const suggestedQuestions = safeParseArray(post.suggested_questions);
-  const cats = (post.categories || "").split(",").map((c) => c.trim()).filter(Boolean);
+  const cats = splitCategories(post.categories);
   const absUrl = `https://arxiv.org/abs/${post.arxiv_id}`;
   const pdfUrl = `https://arxiv.org/pdf/${(post.arxiv_id || "").replace(/v\d+$/, "")}`;
 
@@ -221,11 +221,7 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
   const { config, posts } = opts;
   const cards = posts
     .map((p) => {
-      const cats = (p.categories || "")
-        .split(",")
-        .map((c) => c.trim())
-        .filter(Boolean)
-        .slice(0, 3);
+      const cats = splitCategories(p.categories).slice(0, 3);
       const haystack = `${p.title} ${p.subtitle} ${p.tldr} ${p.categories || ""} ${p.arxiv_id || ""}`
         .toLowerCase();
       return `<a class="card" href="/p/${escapeHtml(p.slug)}.html" data-search="${escapeHtml(haystack)}">
@@ -414,7 +410,8 @@ function jsonForScript(data: unknown): string {
 function safeParseArray(s: string): string[] {
   try {
     const v = JSON.parse(s);
-    return Array.isArray(v) ? v.map(String) : [];
+    if (!Array.isArray(v)) return [];
+    return v.filter((x) => x != null).map(String).filter((x) => x.trim() !== "");
   } catch {
     return [];
   }

@@ -128,9 +128,9 @@ export class LLMClient {
       }
     }
     if (!triedAny) {
-      // every free key is cooling and no paid key — wait briefly on the first key
-      await sleep(2000);
-      return geminiComplete(this.geminiFree[0], this.config.model, system, user, maxTokens);
+      // every free key is in cooldown and there is no paid fallback → fail fast
+      // with a clear message rather than hammering a key we know is rate-limited.
+      throw new Error("모든 Gemini 무료 키가 사용량 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.");
     }
     throw lastErr || new Error("모든 Gemini 키가 소진되었습니다.");
   }
@@ -214,7 +214,24 @@ export class LLMClient {
     };
   }
 
+  private track(result: ProviderResult): string {
+    if (result.usage) {
+      this.usage.totalCalls++;
+      this.usage.promptTokens += result.usage.prompt_tokens || 0;
+      this.usage.completionTokens += result.usage.completion_tokens || 0;
+      this.usage.totalTokens += result.usage.total_tokens || 0;
+    }
+    return result.text;
+  }
+
   async chatComplete(system: string, userMessage: string, maxTokens = 8192): Promise<string> {
+    // Gemini does its own key rotation + cooldown inside geminiWithFallback, so it
+    // must NOT also go through the outer retry loop (that would re-run the whole
+    // fallback on a 429 and hammer cooling keys for ~30-60s before failing).
+    if (this.config.provider === "gemini") {
+      return this.track(await this.geminiWithFallback(system, userMessage, maxTokens));
+    }
+
     const MAX_RETRIES = 5;
     const BASE_DELAY_MS = 2000;
 
@@ -222,9 +239,6 @@ export class LLMClient {
       try {
         let result: ProviderResult;
         switch (this.config.provider) {
-          case "gemini":
-            result = await this.geminiWithFallback(system, userMessage, maxTokens);
-            break;
           case "azure-openai":
             result = await this.azureComplete(system, userMessage, maxTokens);
             break;
@@ -237,14 +251,7 @@ export class LLMClient {
           default:
             throw new Error(`Unknown LLM provider: ${this.config.provider}`);
         }
-
-        if (result.usage) {
-          this.usage.totalCalls++;
-          this.usage.promptTokens += result.usage.prompt_tokens || 0;
-          this.usage.completionTokens += result.usage.completion_tokens || 0;
-          this.usage.totalTokens += result.usage.total_tokens || 0;
-        }
-        return result.text;
+        return this.track(result);
       } catch (error) {
         if (isRetryableError(error) && attempt < MAX_RETRIES) {
           const delay = BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 1000;

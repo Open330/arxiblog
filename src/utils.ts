@@ -63,6 +63,11 @@ export function parseLlmJson<T = unknown>(raw: string): T {
   }
 }
 
+/** Split a comma-separated category string into trimmed, non-empty parts. */
+export function splitCategories(s: string | undefined | null): string[] {
+  return (s || "").split(",").map((c) => c.trim()).filter(Boolean);
+}
+
 /** Turn an arbitrary string into a URL-safe slug (keeps Korean characters). */
 export function slugify(text: string): string {
   return text

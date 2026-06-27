@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { parseArxivId } from "./ingest/arxiv";
 import { parseLlmJson, slugify, estimateReadingMinutes, stripJsonFences } from "./utils";
 import { renderPostBody, generateToc, injectHeadingIds } from "./build/renderer";
+import { hasLlmKey } from "./config";
 import type { Annotation } from "./store";
 
 const ann = (term: string, explanation: string, kind = "jargon"): Annotation =>
@@ -83,5 +84,27 @@ describe("toc + heading ids", () => {
     const html = injectHeadingIds(await renderPostBody(md, []), toc);
     const ids = [...html.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
     expect(ids).toEqual(["들어가며", "결과", "결과-1"]);
+  });
+  test("'##' inside a code fence is NOT a TOC heading (no id desync)", async () => {
+    const md = "## 들어가며\n\n```bash\n## this is a comment\n```\n\n## 결과\n\n끝";
+    const toc = generateToc(md);
+    expect(toc.map((t) => t.text)).toEqual(["들어가며", "결과"]);
+    const html = injectHeadingIds(await renderPostBody(md, []), toc);
+    const ids = [...html.matchAll(/<h2 id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toEqual(["들어가며", "결과"]); // real headings keep correct ids
+  });
+});
+
+describe("hasLlmKey (provider-aware)", () => {
+  const base = { model: "m", endpoint: "" };
+  test("gemini: pool or paid counts even with empty api_key", () => {
+    expect(hasLlmKey({ provider: "gemini", api_key: "", api_keys: ["k1"], ...base })).toBe(true);
+    expect(hasLlmKey({ provider: "gemini", api_key: "", api_key_paid: "p", ...base })).toBe(true);
+    expect(hasLlmKey({ provider: "gemini", api_key: "", ...base })).toBe(false);
+  });
+  test("openai/anthropic require api_key; gemini pool does not satisfy them", () => {
+    expect(hasLlmKey({ provider: "openai", api_key: "", api_keys: ["k1"], ...base })).toBe(false);
+    expect(hasLlmKey({ provider: "openai", api_key: "sk-x", ...base })).toBe(true);
+    expect(hasLlmKey({ provider: "anthropic", api_key: "", ...base })).toBe(false);
   });
 });
