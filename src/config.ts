@@ -83,6 +83,7 @@ export interface ArxiblogConfig {
   features?: {
     figures?: boolean; // fetch + explain paper figures
     translate_en?: boolean; // generate an English version of each post
+    factcheck?: boolean; // verify structured claims + annotations against the source
   };
 }
 

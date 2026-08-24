@@ -6,6 +6,7 @@ import { parseArxivId, fetchArxivMeta, fetchArxivFullText } from "../ingest/arxi
 import { fetchArxivFigures } from "../ingest/figures";
 import { explainFigures, type ExplainedFigure } from "./figures";
 import { translatePostToEnglish } from "./translate";
+import { verifyAndGround } from "./verify";
 import { transformToBlog, postSlug, estimateReadingMinutes } from "./transform";
 
 export interface AddResult {
@@ -66,6 +67,34 @@ export async function addPaper(
   const llm = new LLMClient(config.llm);
   if (opts.onRetry) llm.onRetry = opts.onRetry;
   const blog = await transformToBlog(llm, meta, rawText, persona, level);
+
+  // Source-grounded fact-check — best-effort. Corrects overstated/unsupported
+  // structured claims and re-grounds annotations against the paper; a failure
+  // never blocks publishing.
+  if (config.features?.factcheck !== false) {
+    try {
+      const verified = await verifyAndGround(
+        llm,
+        { title: meta.title, abstract: meta.abstract },
+        rawText,
+        {
+          tldr: blog.tldr,
+          takeaways: blog.takeaways,
+          contributions: blog.contributions,
+          strengths: blog.strengths,
+          limitations: blog.limitations,
+          annotations: blog.annotations,
+        }
+      );
+      blog.tldr = verified.tldr;
+      blog.takeaways = verified.takeaways;
+      blog.contributions = verified.contributions;
+      blog.strengths = verified.strengths;
+      blog.limitations = verified.limitations;
+      blog.annotations = verified.annotations;
+      if (verified.changes) progress("factcheck", String(verified.changes));
+    } catch { /* skip fact-check */ }
+  }
 
   const slug = postSlug(meta, blog.title);
   const minutes = estimateReadingMinutes(blog.content);

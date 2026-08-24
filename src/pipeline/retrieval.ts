@@ -248,6 +248,22 @@ export function retrieve(raw: string, query: string, options: RetrieveOptions = 
   return kept;
 }
 
+/**
+ * Extract lowercased English/technical tokens (model names, "attention", etc.)
+ * from Korean-authored text, to expand a Korean query toward an English paper.
+ */
+export function latinTerms(texts: string[], max: number = 60): string[] {
+  const seen = new Set<string>();
+  for (const text of texts) {
+    for (const match of (text || "").match(/[A-Za-z][A-Za-z0-9-]{2,}/g) || []) {
+      const t = match.toLowerCase();
+      if (t.length >= 3 && t.length <= 30) seen.add(t);
+      if (seen.size >= max) return [...seen];
+    }
+  }
+  return [...seen];
+}
+
 /** Trim a passage to a short, word-boundary-respecting snippet for display. */
 export function snippet(text: string, maxChars: number = 240): string {
   const t = text.trim().replace(/\s+/g, " ");

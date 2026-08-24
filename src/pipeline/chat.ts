@@ -1,7 +1,7 @@
 import type { LLMClient } from "../llm-client";
 import type { Store, Post } from "../store";
 import { representativeText } from "../utils";
-import { retrieve, snippet } from "./retrieval";
+import { latinTerms, retrieve, snippet } from "./retrieval";
 
 const MAX_CONTEXT_CHARS = 14_000;
 
@@ -37,18 +37,6 @@ function inferSectionBoost(question: string): { pattern: RegExp; factor: number 
   return undefined;
 }
 
-/** English/technical vocabulary to bridge a Korean question to an English paper. */
-function latinVocabulary(...texts: string[]): string[] {
-  const seen = new Set<string>();
-  for (const text of texts) {
-    for (const match of (text || "").match(/[A-Za-z][A-Za-z0-9-]{2,}/g) || []) {
-      const t = match.toLowerCase();
-      if (t.length >= 3 && t.length <= 30) seen.add(t);
-      if (seen.size >= 60) break;
-    }
-  }
-  return [...seen];
-}
 
 /**
  * Answer a reader's question grounded in the post, its annotations, and — most
@@ -74,7 +62,7 @@ export async function answerQuestion(
   ].join(" ");
   // Bridge the Korean question to the English paper with the post's own
   // vocabulary, and nudge toward the section the reader is asking about.
-  const expandTerms = latinVocabulary(post.title, annotations.map((a) => a.term).join(" "), post.content || "");
+  const expandTerms = latinTerms([post.title, annotations.map((a) => a.term).join(" "), post.content || ""]);
   const passages = rawText
     ? retrieve(rawText, retrievalQuery, {
         k: 8,
