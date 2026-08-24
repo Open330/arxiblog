@@ -83,6 +83,7 @@ export async function addPaper(
     prerequisites: blog.prerequisites,
     who_should_read: blog.who_should_read,
     suggested_questions: blog.suggested_questions,
+    key_references: blog.key_references,
   });
   store.replaceAnnotations(post.id, blog.annotations);
 

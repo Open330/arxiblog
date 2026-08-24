@@ -165,35 +165,78 @@ function cardSvg(post: Post, siteName: string): string {
  * @returns the site-root-relative public path (e.g. "/og/<slug>.png"), or ""
  */
 export async function writeOgImage(post: Post, config: ArxiblogConfig, outDir: string): Promise<string> {
-  const siteName = config.project.name || "arxiblog";
-  const slug = post.slug;
-  const publicPath = (ext: string) => `/og/${encodeURIComponent(slug)}.${ext}`;
+  const map = await writeOgImages([post], config, outDir, ogPngEnabled());
+  return map.get(post.slug) ?? "";
+}
 
-  try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+/** PNG cards need a headless Chromium (slow cold-start), so they are opt-in via
+ *  ARXIBLOG_OG_PNG=1. Default builds/tests use the fast, dependency-free SVG card. */
+export function ogPngEnabled(): boolean {
+  const v = process.env.ARXIBLOG_OG_PNG;
+  return v === "1" || v === "true";
+}
+
+/**
+ * Batch variant: generate OG cards for many posts, launching Chromium ONCE and
+ * reusing a single page (was: one browser launch per post — slow enough to blow
+ * build/test timeouts). Falls back to SVG per-post, or for all posts when
+ * Playwright is unavailable. Returns a slug → public-path map ("" entries omitted).
+ */
+export async function writeOgImages(
+  posts: Post[],
+  config: ArxiblogConfig,
+  outDir: string,
+  usePng = false
+): Promise<Map<string, string>> {
+  const siteName = config.project.name || "arxiblog";
+  const result = new Map<string, string>();
+  const pub = (slug: string, ext: string) => `/og/${encodeURIComponent(slug)}.${ext}`;
+  const svg = (post: Post): void => {
     try {
-      const page = await browser.newPage({
-        viewport: { width: WIDTH, height: HEIGHT },
-        deviceScaleFactor: 1,
-      });
-      await page.setContent(cardHtml(post, siteName), { waitUntil: "load" });
-      await page.screenshot({
-        path: join(outDir, `${slug}.png`),
-        type: "png",
-        clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT },
-      });
-      return publicPath("png");
-    } finally {
-      await browser.close();
+      writeFileSync(join(outDir, `${post.slug}.svg`), cardSvg(post, siteName));
+      result.set(post.slug, pub(post.slug, "svg"));
+    } catch { /* omit og:image for this post */ }
+  };
+  if (posts.length === 0) return result;
+
+  // Fast path: SVG cards (no browser). PNG is opt-in because Chromium cold-start
+  // is slow enough to blow build/test timeouts.
+  if (!usePng) {
+    for (const post of posts) svg(post);
+    return result;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let chromium: any;
+  try {
+    ({ chromium } = await import("playwright"));
+  } catch {
+    for (const post of posts) svg(post); // no Playwright → SVG for all
+    return result;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let browser: any;
+  try {
+    browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
+    for (const post of posts) {
+      try {
+        await page.setContent(cardHtml(post, siteName), { waitUntil: "load" });
+        await page.screenshot({
+          path: join(outDir, `${post.slug}.png`),
+          type: "png",
+          clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT },
+        });
+        result.set(post.slug, pub(post.slug, "png"));
+      } catch {
+        svg(post); // per-post failure → SVG fallback, keep going
+      }
     }
   } catch {
-    // Playwright missing or a browser launch failure: fall back to SVG.
-    try {
-      writeFileSync(join(outDir, `${slug}.svg`), cardSvg(post, siteName));
-      return publicPath("svg");
-    } catch {
-      return "";
-    }
+    for (const post of posts) if (!result.has(post.slug)) svg(post); // launch failed
+  } finally {
+    try { await browser?.close(); } catch { /* best effort */ }
   }
+  return result;
 }

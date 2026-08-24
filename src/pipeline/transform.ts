@@ -18,6 +18,8 @@ export interface BlogResult {
   prerequisites: string[];
   who_should_read: string;
   suggested_questions: string[];
+  // key prior work this paper builds on (Smart Citations)
+  key_references: Array<{ title: string; why: string; arxiv_id?: string }>;
 }
 
 /** Cap raw paper text so we stay within a reasonable token budget. */
@@ -79,6 +81,7 @@ flowchart TD
 - prerequisites: 이 글을 더 잘 읽기 위해 알면 좋은 선행 개념 2~4개 (각 짧은 구).
 - who_should_read: "이런 분께 추천" 한 문장.
 - suggested_questions: 독자가 던질 법한 좋은 질문 3개 (각 한 줄, 챗에 바로 쓸 수 있게).
+- key_references: 이 논문이 기댄 핵심 선행연구 2~4편. 각 항목은 { title, why, arxiv_id? }. title=논문 제목(정확히 아는 경우만, 지어내지 말 것), why=이 논문에 왜 중요한지 한 줄, arxiv_id=아는 경우에만 arXiv 번호(예 "1706.03762"), 모르면 생략. 확실한 것만 넣고 불확실하면 배열을 짧게.
 
 [출력 형식] 아래 JSON 객체 하나만. 코드펜스 없이 JSON만.
 {
@@ -95,7 +98,8 @@ flowchart TD
   "limitations": ["한계 1", "한계 2"],
   "prerequisites": ["선행 개념 1", "선행 개념 2"],
   "who_should_read": "이런 분께 추천: ...",
-  "suggested_questions": ["질문 1", "질문 2", "질문 3"]
+  "suggested_questions": ["질문 1", "질문 2", "질문 3"],
+  "key_references": [{ "title": "선행연구 제목", "why": "왜 중요한지 한 줄", "arxiv_id": "1706.03762" }]
 }
 content 안의 mermaid 코드펜스 줄바꿈은 \\n 으로 정확히 이스케이프하세요. kind 값: "jargon" | "concept" | "context" | "math".`;
 }
@@ -186,6 +190,20 @@ export async function transformToBlog(
     return { term, kind, explanation };
   });
 
+  // key_references is a best-effort extra — filter malformed items rather than throw.
+  const rawRefs = Array.isArray(value.key_references) ? value.key_references : [];
+  const keyReferences = rawRefs
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && !Array.isArray(r))
+    .map((r) => ({
+      title: typeof r.title === "string" ? r.title.trim() : "",
+      why: typeof r.why === "string" ? r.why.trim() : "",
+      arxiv_id: typeof r.arxiv_id === "string" && /^\d{4}\.\d{4,5}(v\d+)?$/.test(r.arxiv_id.trim())
+        ? r.arxiv_id.trim()
+        : undefined,
+    }))
+    .filter((r) => r.title)
+    .slice(0, 6);
+
   const title = stringField("title", meta.title);
   return {
     title,
@@ -201,6 +219,7 @@ export async function transformToBlog(
     prerequisites: stringArray("prerequisites"),
     who_should_read: stringField("who_should_read"),
     suggested_questions: stringArray("suggested_questions").slice(0, 5),
+    key_references: keyReferences,
   };
 }
 

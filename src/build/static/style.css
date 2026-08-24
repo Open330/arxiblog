@@ -469,3 +469,12 @@ body.chat-open { overflow: hidden; }
   .callout, .paper-card, .review-card, .post-body pre { break-inside: avoid; box-shadow: none; }
   .annot-pop { display: none !important; }
 }
+
+/* ── Key references (Smart Citations) ── */
+.references { margin: 48px 0 0; padding-top: 28px; border-top: 1px solid var(--border); }
+.references h2 { font-size: 1.25rem; margin: 0 0 16px; }
+.ref-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.ref-list li { border: 1px solid var(--border); border-radius: 12px; padding: 13px 16px; display: flex; flex-direction: column; gap: 4px; }
+.ref-title { font-weight: 600; }
+.ref-why { color: var(--muted); font-size: .9rem; line-height: 1.5; }
+.ref-link { align-self: flex-start; font-family: ui-monospace, monospace; font-size: .8rem; }

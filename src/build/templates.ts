@@ -131,6 +131,9 @@ export function renderPostPage(opts: {
   const limitations = safeParseArray(post.limitations);
   const prerequisites = safeParseArray(post.prerequisites);
   const suggestedQuestions = safeParseArray(post.suggested_questions);
+  const keyRefs = safeParseObjectArray<{ title: string; why: string; arxiv_id?: string }>(
+    (post as { key_references?: string }).key_references
+  ).filter((r) => r && typeof r.title === "string" && r.title.trim());
   const cats = splitCategories(post.categories);
   const arxivId = (post.arxiv_id || "").trim();
   const arxivPath = arxivId.split("/").map(encodeURIComponent).join("/");
@@ -186,6 +189,19 @@ export function renderPostPage(opts: {
           .map((q) => `<button class="ask-chip" type="button" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
           .join("")}</div>
       </section>`
+    : "";
+
+  const citationsHtml = keyRefs.length
+    ? `<section class="references"><h2>핵심 참고문헌</h2><ul class="ref-list">${keyRefs
+        .map((r) => {
+          const id = (r.arxiv_id || "").trim();
+          const link = id
+            ? `<a class="ref-link" href="https://arxiv.org/abs/${escapeHtml(id)}" target="_blank" rel="noopener">arXiv:${escapeHtml(id)} ↗</a>`
+            : "";
+          const why = (r.why || "").trim() ? `<span class="ref-why">${escapeHtml(r.why.trim())}</span>` : "";
+          return `<li><span class="ref-title">${escapeHtml(r.title.trim())}</span>${why}${link}</li>`;
+        })
+        .join("")}</ul></section>`
     : "";
 
   const relatedHtml = related.length
@@ -259,6 +275,7 @@ ${siteHeader("../", opts.config.project.name)}
     </div>
 
     ${glossary}
+    ${citationsHtml}
     ${relatedHtml}
 
     <footer class="post-footer">
@@ -723,6 +740,17 @@ function safeParseArray(s: string): string[] {
     const v = JSON.parse(s);
     if (!Array.isArray(v)) return [];
     return v.filter((x) => x != null).map(String).filter((x) => x.trim() !== "");
+  } catch {
+    return [];
+  }
+}
+
+/** Parse a JSON array of objects (e.g. key_references); returns [] on any malformed input. */
+function safeParseObjectArray<T>(s: string | undefined): T[] {
+  try {
+    const v = JSON.parse(s || "[]");
+    if (!Array.isArray(v)) return [];
+    return v.filter((x): x is T => !!x && typeof x === "object" && !Array.isArray(x));
   } catch {
     return [];
   }

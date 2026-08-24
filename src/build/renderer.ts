@@ -15,7 +15,7 @@ import { resolveBuildOutputDir, type ArxiblogConfig } from "../config";
 import type { Store, Annotation } from "../store";
 import { renderPostPage, renderIndexPage, renderNotFoundPage, safePublicUrl } from "./templates";
 import { renderFeed } from "./feed";
-import { writeOgImage } from "./og";
+import { writeOgImages, ogPngEnabled } from "./og";
 import { escapeHtml, splitCategories } from "../utils";
 
 function normalizeTerm(s: string): string {
@@ -390,7 +390,9 @@ async function renderSiteInto(
   const ogDir = join(outputDir, "og");
   mkdirSync(ogDir, { recursive: true });
   const ogBase = (safePublicUrl(config.project.url) || "").replace(/\/$/, "");
-  const ogPaths = new Map<string, string>();
+  // Generate every OG card up front with a single shared browser (one launch,
+  // not one per post — the per-post launch blew build/test timeouts).
+  const ogPaths = await writeOgImages(posts, config, ogDir, ogPngEnabled());
 
   for (const post of posts) {
     const annotations = store.getAnnotations(post.id);
@@ -415,8 +417,7 @@ async function renderSiteInto(
         reading_minutes: x.p.reading_minutes,
       }));
 
-    const ogPath = await writeOgImage(post, config, ogDir);
-    ogPaths.set(post.slug, ogPath);
+    const ogPath = ogPaths.get(post.slug) ?? "";
     const ogImage = ogBase && ogPath ? `${ogBase}${ogPath}` : "";
 
     const html = renderPostPage({
