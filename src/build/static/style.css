@@ -542,3 +542,27 @@ body.chat-open { overflow: hidden; }
 .subscribe-status { min-height: 1.2em; margin: 14px 0 0; font-size: .88rem; color: var(--muted); }
 .subscribe-status.ok { color: var(--success); }
 .subscribe-status.error { color: var(--danger); }
+
+/* ── Chat: grounded source citations ── */
+.chat-sources { margin-top: 10px; white-space: normal; }
+.chat-sources > summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 5px;
+  font-size: .78rem; font-weight: 600; color: var(--muted);
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.chat-sources > summary::-webkit-details-marker { display: none; }
+.chat-sources > summary::before { content: "📄"; font-size: .82rem; }
+.chat-sources > summary:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+.chat-sources[open] > summary { margin-bottom: 9px; }
+.chat-source {
+  margin: 0 0 8px; padding: 8px 12px;
+  border-left: 3px solid var(--accent-weak); border-radius: 0 8px 8px 0;
+  background: var(--bg); color: var(--text-soft); font-size: .82rem; line-height: 1.55;
+}
+.chat-source:last-child { margin-bottom: 0; }
+.chat-source-section {
+  display: block; margin-bottom: 3px; font-style: normal; font-weight: 600;
+  font-size: .74rem; letter-spacing: .01em; color: var(--muted);
+}
+.chat-source p { margin: 0; overflow-wrap: anywhere; }

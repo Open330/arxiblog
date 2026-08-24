@@ -500,11 +500,11 @@ async function handleChat(
     const post = store.getPost(slug);
     if (!post) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
     const llm = new LLMClient(config.llm);
-    const answer = await answerQuestion(llm, store, post, question, history);
+    const { answer, sources } = await answerQuestion(llm, store, post, question, history);
     onSuccess(); // charge quota as soon as the paid/upstream answer was produced
     const u = llm.getUsageStats();
     store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
-    return Response.json({ answer });
+    return Response.json({ answer, sources });
   } catch (e) {
     return jsonError(e);
   }

@@ -245,6 +245,32 @@
     return item;
   }
 
+  function renderSources(bubble, sources) {
+    if (!bubble || !Array.isArray(sources) || sources.length === 0) return;
+    const details = document.createElement("details");
+    details.className = "chat-sources";
+    const summary = document.createElement("summary");
+    summary.textContent = "원문 근거 " + sources.length + "곳";
+    details.appendChild(summary);
+    sources.forEach(function (source) {
+      if (!source || typeof source.text !== "string") return;
+      const quote = document.createElement("blockquote");
+      quote.className = "chat-source";
+      if (source.section) {
+        const cite = document.createElement("cite");
+        cite.className = "chat-source-section";
+        cite.textContent = source.section;
+        quote.appendChild(cite);
+      }
+      const p = document.createElement("p");
+      p.textContent = source.text;
+      quote.appendChild(p);
+      details.appendChild(quote);
+    });
+    bubble.appendChild(details);
+    if (log) log.scrollTop = log.scrollHeight;
+  }
+
   function setChatBusy(nextBusy) {
     busy = nextBusy;
     if (log) log.setAttribute("aria-busy", String(nextBusy));
@@ -319,6 +345,7 @@
       if (pending) {
         pending.classList.remove("chat-typing");
         pending.textContent = answer;
+        renderSources(pending, data && data.sources);
       }
       history.push({ role: "assistant", content: answer });
     } catch (_err) {

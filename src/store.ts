@@ -297,11 +297,25 @@ export class Store {
   }
 
   getPost(slug: string): Post | null {
-    return (this.db.prepare("SELECT * FROM posts WHERE slug=?").get(slug) as Post) ?? null;
+    // Join papers so arxiv_id / paper_title / categories are hydrated — the
+    // chat grounds on the source paper via post.arxiv_id, and posts has only
+    // paper_id, so a bare SELECT * would leave arxiv_id undefined.
+    return (this.db
+      .prepare(
+        `SELECT po.*, pa.title AS paper_title, pa.arxiv_id AS arxiv_id, pa.categories AS categories
+         FROM posts po JOIN papers pa ON pa.id = po.paper_id WHERE po.slug=?`
+      )
+      .get(slug) as Post) ?? null;
   }
 
   getPostByPaper(paperId: number): Post | null {
-    return (this.db.prepare("SELECT * FROM posts WHERE paper_id=? ORDER BY id DESC LIMIT 1").get(paperId) as Post) ?? null;
+    return (this.db
+      .prepare(
+        `SELECT po.*, pa.title AS paper_title, pa.arxiv_id AS arxiv_id, pa.categories AS categories
+         FROM posts po JOIN papers pa ON pa.id = po.paper_id
+         WHERE po.paper_id=? ORDER BY po.id DESC LIMIT 1`
+      )
+      .get(paperId) as Post) ?? null;
   }
 
   listPosts(): Post[] {
