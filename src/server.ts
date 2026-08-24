@@ -1,11 +1,20 @@
 import { join, normalize, extname, sep } from "path";
-import { existsSync, statSync } from "fs";
-import { DB_FILE, loadConfig, saveConfig, DEFAULT_CHAT, hasLlmKey } from "./config";
+import { existsSync, realpathSync, statSync } from "fs";
+import {
+  DB_FILE,
+  loadConfig,
+  saveConfig,
+  DEFAULT_CHAT,
+  defaultLlmModel,
+  hasLlmKey,
+  resolveBuildOutputDir,
+} from "./config";
 import { Store } from "./store";
-import { LLMClient } from "./llm-client";
+import { LLMClient, LLMProviderError } from "./llm-client";
 import { answerQuestion, type ChatTurn } from "./pipeline/chat";
 import { addPaper } from "./pipeline/add";
-import { buildSite } from "./build/renderer";
+import { parseArxivId } from "./ingest/arxiv";
+import { buildSite, type BuildStore } from "./build/renderer";
 import { renderAdminPage } from "./build/templates";
 
 const MIME: Record<string, string> = {
@@ -15,45 +24,147 @@ const MIME: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
   ".woff2": "font/woff2",
 };
 
-/**
- * In-memory sliding-window rate limiter for the public chat endpoint.
- * Guards both per-IP abuse and a global daily cap (to protect the LLM free quota).
- */
-function makeChatLimiter() {
-  const ipHits = new Map<string, number[]>();
-  let day = Math.floor(Date.now() / 86_400_000);
-  let dayCount = 0; // counts SUCCESSFUL answers only (protects the LLM quota)
-  const rollover = (now: number) => {
-    const today = Math.floor(now / 86_400_000);
-    if (today !== day) { day = today; dayCount = 0; ipHits.clear(); }
-  };
-  return {
-    /** Admission check. Counts the attempt against the per-IP window (abuse guard);
-     *  the global/day cap is only checked here, never incremented (see noteSuccess). */
-    gate(ip: string, perIpPerHour: number, globalPerDay: number): { ok: boolean; reason?: string } {
-      const now = Date.now();
-      rollover(now);
-      if (globalPerDay > 0 && dayCount >= globalPerDay) {
-        return { ok: false, reason: "오늘 전체 챗 사용량 한도에 도달했어요. 내일 다시 시도해 주세요." };
+export const MAX_API_BODY_BYTES = 64 * 1024;
+const MAX_QUESTION_CHARS = 2_000;
+const MAX_HISTORY_TURN_CHARS = 4_000;
+
+class HttpRequestError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+/** Parse a small JSON object with consistent 400/413/415 failures. */
+export async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+  const contentType = req.headers.get("content-type");
+  if (contentType && !/^(?:application\/(?:[\w.+-]+\+)?json)(?:\s*;|$)/i.test(contentType)) {
+    throw new HttpRequestError(415, "application/json 요청만 지원합니다.");
+  }
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_API_BODY_BYTES) {
+    throw new HttpRequestError(413, "요청 본문이 너무 큽니다.");
+  }
+
+  const text = await req.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_API_BODY_BYTES) {
+    throw new HttpRequestError(413, "요청 본문이 너무 큽니다.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HttpRequestError(400, "올바른 JSON 요청 본문이 필요합니다.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HttpRequestError(400, "JSON 객체 요청 본문이 필요합니다.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+export function jsonError(
+  error: unknown,
+  report: (errorName: string) => void = (errorName) =>
+    console.error(`[arxiblog] unexpected request failure: ${errorName}`)
+): Response {
+  if (error instanceof HttpRequestError) {
+    return Response.json(
+      { error: error.message },
+      { status: error.status, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (error instanceof LLMProviderError) {
+    return Response.json(
+      { error: error.message },
+      {
+        status: error.httpStatus,
+        headers: {
+          "Cache-Control": "no-store",
+          ...(error.httpStatus === 429 ? { "Retry-After": "60" } : {}),
+        },
       }
-      const recent = (ipHits.get(ip) || []).filter((t) => now - t < 3_600_000);
-      if (perIpPerHour > 0 && recent.length >= perIpPerHour) {
-        return { ok: false, reason: "잠시 후 다시 시도해 주세요. (시간당 질문 한도를 초과했어요)" };
-      }
-      recent.push(now);
-      ipHits.set(ip, recent);
-      if (ipHits.size > 5000) for (const [k, v] of ipHits) if (!v.some((t) => now - t < 3_600_000)) ipHits.delete(k);
-      return { ok: true };
+    );
+  }
+  // Parser/SQLite errors can contain config lines, file paths, or upstream
+  // payloads. Keep details out of the response and even the private log text.
+  report(error instanceof Error ? error.name : "UnknownError");
+  return Response.json(
+    { error: "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요." },
+    { status: 500, headers: { "Cache-Control": "no-store" } }
+  );
+}
+
+function methodNotAllowed(allow: string): Response {
+  return Response.json(
+    { error: "method not allowed" },
+    { status: 405, headers: { Allow: allow, "Cache-Control": "no-store" } }
+  );
+}
+
+/** Minimal liveness response for process/tunnel supervisors; exposes no config. */
+export function healthResponse(method: string): Response {
+  if (method !== "GET" && method !== "HEAD") return methodNotAllowed("GET, HEAD");
+  return new Response(method === "HEAD" ? null : JSON.stringify({ status: "ok" }), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
     },
-    /** Call only after a real LLM answer was produced — charges the daily global cap. */
-    noteSuccess() {
-      rollover(Date.now());
-      dayCount++;
+  });
+}
+
+/**
+ * SQLite-backed limiter. Supplying the application's Store makes quotas durable
+ * across restarts and shared by multiple server processes. The clock-only
+ * overload is retained for callers/tests that used the old factory signature.
+ */
+export function makeChatLimiter(store: Store, now?: () => number): ReturnType<typeof createChatLimiter>;
+export function makeChatLimiter(now?: () => number): ReturnType<typeof createChatLimiter>;
+export function makeChatLimiter(storeOrNow?: Store | (() => number), injectedNow?: () => number) {
+  const store = storeOrNow instanceof Store ? storeOrNow : new Store(":memory:");
+  const now = typeof storeOrNow === "function" ? storeOrNow : (injectedNow || (() => Date.now()));
+  return createChatLimiter(store, now);
+}
+
+function createChatLimiter(store: Store, now: () => number) {
+  return {
+    /** Admission and reservation happen in one cross-process transaction. */
+    gate(ip: string, perIpPerHour: number, globalPerDay: number, maxInFlight = 0): {
+      ok: boolean;
+      reason?: string;
+      retryAfterSeconds?: number;
+      finish?: (success: boolean) => void;
+    } {
+      const reservation = store.reserveChatQuota(ip, perIpPerHour, globalPerDay, now(), maxInFlight);
+      if (!reservation.ok) {
+        return {
+          ok: false,
+          reason: reservation.reason === "global"
+            ? "오늘 전체 챗 사용량 한도에 도달했어요. 내일 다시 시도해 주세요."
+            : reservation.reason === "concurrency"
+              ? "질문이 몰리고 있어요. 잠시 후 다시 시도해 주세요."
+              : "잠시 후 다시 시도해 주세요. (시간당 질문 한도를 초과했어요)",
+          retryAfterSeconds: reservation.reason === "concurrency" ? 10 : 60,
+        };
+      }
+      let finished = false;
+      return {
+        ok: true,
+        finish(success: boolean) {
+          if (finished) return;
+          finished = true;
+          store.settleChatQuota(reservation.reservationId, success, now());
+        },
+      };
     },
   };
 }
@@ -85,13 +196,24 @@ function safeJoin(root: string, urlPath: string): string | null {
   return full;
 }
 
+function confinedRealPath(root: string, filePath: string): string | null {
+  try {
+    const rootReal = realpathSync(root);
+    const fileReal = realpathSync(filePath);
+    if (fileReal !== rootReal && !fileReal.startsWith(rootReal + sep)) return null;
+    return fileReal;
+  } catch {
+    return null;
+  }
+}
+
 export function startServer(projectRoot: string, port: number, host = "localhost"): void {
   const initialConfig = loadConfig(projectRoot);
-  const siteDir = join(projectRoot, initialConfig.build.output_dir);
+  const siteDir = resolveBuildOutputDir(projectRoot, initialConfig.build.output_dir);
   const store = new Store(join(projectRoot, DB_FILE));
   const adminToken = crypto.randomUUID().replace(/-/g, "");
 
-  const chatLimiter = makeChatLimiter();
+  const chatLimiter = makeChatLimiter(store);
 
   // Serialize add/settings/delete so concurrent writes + rebuilds don't race.
   let writeChain: Promise<unknown> = Promise.resolve();
@@ -112,16 +234,26 @@ export function startServer(projectRoot: string, port: number, host = "localhost
     port,
     hostname: host,
     idleTimeout: 255, // allow long LLM calls during /api/add
+    maxRequestBodySize: MAX_API_BODY_BYTES,
     async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
 
+      // ── Unauthenticated liveness probe (no configuration/DB details) ──
+      if (path === "/healthz") return healthResponse(req.method);
+
       // ── Admin page (form only; mutations require the token) ──
       if (path === "/admin" && req.method === "GET") {
         return new Response(renderAdminPage(loadConfig(projectRoot)), {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+          },
         });
       }
+      if (path === "/admin") return methodNotAllowed("GET");
 
       // ── Public read APIs ──
       if (path === "/api/chat" && req.method === "POST") {
@@ -129,44 +261,76 @@ export function startServer(projectRoot: string, port: number, host = "localhost
         if (!chatCfg.enabled) {
           return Response.json({ answer: "이 사이트에서는 AI 챗이 꺼져 있어요." }, { status: 200 });
         }
-        const gate = chatLimiter.gate(clientIp(req, server, chatCfg.trust_proxy), chatCfg.per_ip_per_hour, chatCfg.global_per_day);
-        if (!gate.ok) return Response.json({ error: gate.reason }, { status: 429 });
-        return handleChat(req, projectRoot, store, () => chatLimiter.noteSuccess());
+        const gate = chatLimiter.gate(
+          clientIp(req, server, chatCfg.trust_proxy),
+          chatCfg.per_ip_per_hour,
+          chatCfg.global_per_day,
+          chatCfg.max_in_flight
+        );
+        if (!gate.ok) return Response.json(
+          { error: gate.reason },
+          {
+            status: 429,
+            headers: {
+              "Cache-Control": "no-store",
+              "Retry-After": String(gate.retryAfterSeconds || 60),
+            },
+          }
+        );
+        let success = false;
+        try {
+          return await handleChat(req, projectRoot, store, () => { success = true; });
+        } finally {
+          gate.finish?.(success);
+        }
       }
+      if (path === "/api/chat") return methodNotAllowed("POST");
       if (path === "/api/posts" && req.method === "GET") {
         return Response.json({
           posts: store.listPosts().map((p) => ({
             slug: p.slug, title: p.title, arxiv_id: p.arxiv_id,
             reading_minutes: p.reading_minutes, persona: p.persona, level: p.level,
           })),
-        });
+        }, { headers: { "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" } });
       }
+      if (path === "/api/posts") return methodNotAllowed("GET");
 
       // ── Token-gated admin APIs ──
       if (path === "/api/config" && req.method === "GET") {
-        if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
+        if (!tokenOk(req, url)) return Response.json(
+          { error: "unauthorized" },
+          { status: 401, headers: { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" } }
+        );
         const c = loadConfig(projectRoot);
         return Response.json({
           provider: c.llm.provider, model: c.llm.model, endpoint: c.llm.endpoint,
           hasKey: hasLlmKey(c.llm), keyPool: (c.llm.api_keys || []).length, hasPaid: !!c.llm.api_key_paid,
           active_persona: c.active_persona, default_level: c.default_level,
           personas: (c.personas || []).map((p) => ({ name: p.name, description: p.description })),
-        });
+        }, { headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
       }
+      if (path === "/api/config") return methodNotAllowed("GET");
       if (path === "/api/settings" && req.method === "POST") {
         if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
         return serialize(() => handleSettings(req, projectRoot));
       }
+      if (path === "/api/settings") return methodNotAllowed("POST");
       if (path === "/api/add" && req.method === "POST") {
         if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
         return serialize(() => handleAdd(req, projectRoot, store));
       }
+      if (path === "/api/add") return methodNotAllowed("POST");
       if (path === "/api/delete" && req.method === "POST") {
         if (!tokenOk(req, url)) return Response.json({ error: "unauthorized" }, { status: 401 });
         return serialize(() => handleDelete(req, projectRoot, store));
       }
+      if (path === "/api/delete") return methodNotAllowed("POST");
+      if (path.startsWith("/api/")) {
+        return Response.json({ error: "not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
+      }
 
       // ── Static files ──
+      if (req.method !== "GET" && req.method !== "HEAD") return methodNotAllowed("GET, HEAD");
       let pathname = path === "/" ? "/index.html" : path;
       let filePath = safeJoin(siteDir, pathname);
       if (!filePath) return new Response("Forbidden", { status: 403 });
@@ -178,15 +342,26 @@ export function startServer(projectRoot: string, port: number, host = "localhost
       if (!existsSync(filePath)) {
         const notFound = join(siteDir, "404.html");
         if (existsSync(notFound)) {
-          return new Response(Bun.file(notFound), {
+          return new Response(req.method === "HEAD" ? null : Bun.file(notFound), {
             status: 404,
-            headers: { "Content-Type": "text/html; charset=utf-8" },
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-cache",
+              "X-Content-Type-Options": "nosniff",
+            },
           });
         }
         return new Response("Not found", { status: 404 });
       }
-      return new Response(Bun.file(filePath), {
-        headers: { "Content-Type": MIME[extname(filePath)] || "application/octet-stream" },
+      const confined = confinedRealPath(siteDir, filePath);
+      if (!confined) return new Response("Forbidden", { status: 403 });
+      const extension = extname(confined).toLowerCase();
+      return new Response(req.method === "HEAD" ? null : Bun.file(confined), {
+        headers: {
+          "Content-Type": MIME[extension] || "application/octet-stream",
+          "Cache-Control": [".html", ".json", ".css", ".js"].includes(extension) ? "no-cache" : "public, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
+        },
       });
     },
     error() {
@@ -197,8 +372,30 @@ export function startServer(projectRoot: string, port: number, host = "localhost
   const shown = host === "0.0.0.0" ? "localhost" : host;
   console.log(`\x1b[32m🚀 arxiblog 서버 실행 중:\x1b[0m http://${shown}:${port}`);
   if (host === "0.0.0.0") console.log(`   LAN: 같은 네트워크에서 http://<이-기기-IP>:${port}`);
-  console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin?token=${adminToken}`);
+  // A URL fragment is never sent to the server/proxy, so the bearer token does
+  // not enter Cloudflare or access logs on the initial admin-page request.
+  console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin#token=${adminToken}`);
   console.log(`   (정지: Ctrl+C)`);
+}
+
+function optionalString(
+  body: Record<string, unknown>,
+  key: string,
+  maxChars: number
+): string | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new HttpRequestError(400, `${key}는 문자열이어야 합니다.`);
+  const trimmed = value.trim();
+  if (trimmed.length > maxChars) throw new HttpRequestError(400, `${key}가 너무 깁니다.`);
+  return trimmed;
+}
+
+function optionalBoolean(body: Record<string, unknown>, key: string): boolean | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new HttpRequestError(400, `${key}는 boolean이어야 합니다.`);
+  return value;
 }
 
 async function handleChat(
@@ -208,10 +405,27 @@ async function handleChat(
   onSuccess: () => void
 ): Promise<Response> {
   try {
-    const body = (await req.json()) as { slug?: string; question?: string; history?: ChatTurn[] };
-    const slug = (body.slug || "").trim();
-    const question = (body.question || "").trim();
+    const body = await readJsonObject(req);
+    const slug = optionalString(body, "slug", 120) || "";
+    const question = optionalString(body, "question", MAX_QUESTION_CHARS) || "";
     if (!slug || !question) return Response.json({ error: "slug과 question이 필요합니다." }, { status: 400 });
+
+    const rawHistory = body.history ?? [];
+    if (!Array.isArray(rawHistory)) throw new HttpRequestError(400, "history는 배열이어야 합니다.");
+    const history: ChatTurn[] = rawHistory.slice(-6).map((turn) => {
+      if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+        throw new HttpRequestError(400, "history 항목 형식이 올바르지 않습니다.");
+      }
+      const role = (turn as Record<string, unknown>).role;
+      const content = (turn as Record<string, unknown>).content;
+      if ((role !== "user" && role !== "assistant") || typeof content !== "string") {
+        throw new HttpRequestError(400, "history 항목 형식이 올바르지 않습니다.");
+      }
+      if (content.length > MAX_HISTORY_TURN_CHARS) {
+        throw new HttpRequestError(400, "history 항목이 너무 깁니다.");
+      }
+      return { role, content };
+    });
 
     const config = loadConfig(projectRoot);
     if (!hasLlmKey(config.llm) || config.llm.provider === "demo") {
@@ -223,25 +437,38 @@ async function handleChat(
     const post = store.getPost(slug);
     if (!post) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
     const llm = new LLMClient(config.llm);
-    const answer = await answerQuestion(llm, store, post, question, body.history || []);
+    const answer = await answerQuestion(llm, store, post, question, history);
+    onSuccess(); // charge quota as soon as the paid/upstream answer was produced
     const u = llm.getUsageStats();
     store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
-    onSuccess(); // charge the daily global quota only for a real answer
     return Response.json({ answer });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
+    return jsonError(e);
   }
 }
 
 async function handleAdd(req: Request, projectRoot: string, store: Store): Promise<Response> {
   try {
-    const body = (await req.json()) as { source?: string; level?: string; persona?: string };
-    const source = (body.source || "").trim();
+    const body = await readJsonObject(req);
+    const source = optionalString(body, "source", 512) || "";
+    const level = optionalString(body, "level", 32);
+    const persona = optionalString(body, "persona", 100);
     if (!source) return Response.json({ error: "arXiv ID 또는 URL이 필요합니다." }, { status: 400 });
+    try {
+      parseArxivId(source);
+    } catch (error) {
+      throw new HttpRequestError(400, (error as Error).message);
+    }
+    if (level && level !== "beginner" && level !== "intermediate") {
+      throw new HttpRequestError(400, "level은 beginner 또는 intermediate여야 합니다.");
+    }
     const config = loadConfig(projectRoot);
     if (!hasLlmKey(config.llm)) return Response.json({ error: "LLM API 키가 설정되지 않았습니다." }, { status: 400 });
+    if (persona && !(config.personas || []).some((item) => item.name === persona)) {
+      throw new HttpRequestError(400, `알 수 없는 persona입니다: ${persona}`);
+    }
 
-    const result = await addPaper(store, config, source, { level: body.level, persona: body.persona });
+    const result = await addPaper(store, config, source, { level, persona });
     await buildSite(store, config, projectRoot);
     return Response.json({
       ok: true, slug: result.slug, title: result.title, arxiv_id: result.arxivId,
@@ -249,40 +476,86 @@ async function handleAdd(req: Request, projectRoot: string, store: Store): Promi
       tokens: result.usage.totalTokens, cost: result.cost,
     });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
+    return jsonError(e);
   }
 }
 
-async function handleSettings(req: Request, projectRoot: string): Promise<Response> {
+export async function handleSettings(req: Request, projectRoot: string): Promise<Response> {
   try {
-    const body = (await req.json()) as Partial<{
-      provider: string; model: string; api_key: string; endpoint: string;
-      active_persona: string; default_level: string;
-    }>;
+    const body = await readJsonObject(req);
+    const provider = optionalString(body, "provider", 40);
+    const model = optionalString(body, "model", 200);
+    const apiKey = optionalString(body, "api_key", 16_384);
+    const endpoint = optionalString(body, "endpoint", 2_048);
+    const activePersona = optionalString(body, "active_persona", 100);
+    const defaultLevel = optionalString(body, "default_level", 32);
+    const clearApiKeys = optionalBoolean(body, "clear_api_keys") || false;
     const config = loadConfig(projectRoot);
-    if (body.provider) config.llm.provider = body.provider;
-    if (body.model) config.llm.model = body.model;
-    if (typeof body.api_key === "string" && body.api_key.trim()) config.llm.api_key = body.api_key.trim();
-    if (typeof body.endpoint === "string") config.llm.endpoint = body.endpoint;
-    if (body.active_persona) config.active_persona = body.active_persona;
-    if (body.default_level) config.default_level = body.default_level;
+    if (provider && !["gemini", "openai", "anthropic", "azure-openai"].includes(provider)) {
+      throw new HttpRequestError(400, `지원하지 않는 provider입니다: ${provider}`);
+    }
+    if (activePersona && !(config.personas || []).some((item) => item.name === activePersona)) {
+      throw new HttpRequestError(400, `알 수 없는 persona입니다: ${activePersona}`);
+    }
+    if (defaultLevel && defaultLevel !== "beginner" && defaultLevel !== "intermediate") {
+      throw new HttpRequestError(400, "default_level은 beginner 또는 intermediate여야 합니다.");
+    }
+    if (clearApiKeys && apiKey) {
+      throw new HttpRequestError(400, "API Key 저장과 전체 삭제를 동시에 요청할 수 없습니다.");
+    }
+    const providerChanged = !!provider && provider !== config.llm.provider;
+    const previousModel = config.llm.model;
+    if (providerChanged) {
+      // api_key is a legacy shared field. Never carry a credential across
+      // providers: doing so could send an OpenAI key to Google (or vice versa).
+      config.llm.api_key = "";
+      config.llm.api_keys = [];
+      config.llm.api_key_paid = "";
+      config.llm.endpoint = "";
+      // A model identifier almost never belongs to two providers. Reset first
+      // so an API client that resends the old form value cannot save an
+      // immediately broken provider/model combination.
+      config.llm.model = defaultLlmModel(provider);
+    }
+    if (provider) config.llm.provider = provider;
+    if (model && (!providerChanged || model !== previousModel)) config.llm.model = model;
+    if (clearApiKeys) {
+      config.llm.api_key = "";
+      config.llm.api_keys = [];
+      config.llm.api_key_paid = "";
+    } else if (apiKey) {
+      config.llm.api_key = apiKey;
+    }
+    if (endpoint !== undefined && (!providerChanged || provider === "azure-openai")) {
+      config.llm.endpoint = endpoint;
+    }
+    if (activePersona) config.active_persona = activePersona;
+    if (defaultLevel) config.default_level = defaultLevel;
     saveConfig(projectRoot, config);
     return Response.json({ ok: true });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
+    return jsonError(e);
   }
 }
 
 async function handleDelete(req: Request, projectRoot: string, store: Store): Promise<Response> {
   try {
-    const body = (await req.json()) as { slug?: string };
-    const slug = (body.slug || "").trim();
+    const body = await readJsonObject(req);
+    const slug = optionalString(body, "slug", 120) || "";
     if (!slug) return Response.json({ error: "slug이 필요합니다." }, { status: 400 });
     if (!store.getPost(slug)) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
+    // Build the post-less site before mutating SQLite. If rendering fails, both
+    // the database and the last-known-good static site still contain the post,
+    // so the user can safely retry instead of ending up in a split-brain state.
+    const remaining = store.listPosts().filter((post) => post.slug !== slug);
+    const buildView: BuildStore = {
+      listPosts: () => remaining,
+      getAnnotations: (postId) => store.getAnnotations(postId),
+    };
+    await buildSite(buildView, loadConfig(projectRoot), projectRoot);
     store.deletePost(slug);
-    await buildSite(store, loadConfig(projectRoot), projectRoot);
     return Response.json({ ok: true });
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
+    return jsonError(e);
   }
 }

@@ -8,7 +8,9 @@
   },
   "files": [
     "bin/**/*",
+    "scripts/**/*",
     "src/**/*",
+    "!src/**/*.test.ts",
     "personas/**/*",
     "README.md",
     "LICENSE"
@@ -31,29 +33,40 @@
     "url": "https://github.com/open330/arxiblog.git"
   },
   "homepage": "https://github.com/open330/arxiblog",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "bun": ">=1.0.0"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun test",
+    "prepublishOnly": "bun run check"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
+    "@fontsource/pretendard": "5.2.5",
     "commander": "^12.1.0",
     "gh-pages": "^6.3.0",
+    "katex": "0.16.47",
     "marked": "^15.0.0",
-    "pdf-parse": "1.1.1",
+    "mermaid": "11.16.0",
+    "pdf-parse": "1.1.4",
     "sanitize-html": "^2.17.2",
     "smol-toml": "^1.3.1"
   },
   "optionalDependencies": {
-    "@anthropic-ai/sdk": "^0.79.0",
+    "@anthropic-ai/sdk": "^0.111.0",
     "openai": "^6.31.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/pdf-parse": "^1.1.5",
-    "@types/sanitize-html": "^2.16.1"
+    "@types/sanitize-html": "^2.16.1",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2"
   }
 }

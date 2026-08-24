@@ -1,10 +1,29 @@
 import { parse, stringify } from "smol-toml";
-import { existsSync, readFileSync, readdirSync } from "fs";
-import { join, dirname } from "path";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 
 export const CONFIG_FILE = "arxiblog.toml";
 export const DB_FILE = "arxiblog.db";
 export const SITE_DIR = "_site";
+
+export const DEFAULT_LLM_MODELS: Readonly<Record<string, string>> = {
+  gemini: "gemini-3.1-flash-lite",
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-5.4-nano",
+  "azure-openai": "gpt-5.4-nano",
+};
+
+export function defaultLlmModel(provider: string): string {
+  return DEFAULT_LLM_MODELS[provider] || DEFAULT_LLM_MODELS.gemini;
+}
 
 export interface LLMConfig {
   provider: string; // "gemini" | "azure-openai" | "openai" | "anthropic"
@@ -19,12 +38,13 @@ export interface LLMConfig {
 
 /** True if a usable LLM key is configured for the *selected* provider. */
 export function hasLlmKey(c: LLMConfig): boolean {
+  const present = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
   if (c.provider === "gemini") {
     // Gemini supports a free-key pool and/or a paid fallback in addition to api_key.
-    return !!(c.api_key || (c.api_keys && c.api_keys.length) || c.api_key_paid);
+    return present(c.api_key) || !!c.api_keys?.some(present) || present(c.api_key_paid);
   }
   // openai / anthropic / azure-openai authenticate with a single api_key.
-  return !!c.api_key;
+  return present(c.api_key);
 }
 
 /**
@@ -43,6 +63,7 @@ export interface ChatConfig {
   enabled?: boolean; // false → chat endpoint returns a disabled message
   per_ip_per_hour?: number; // 0 = unlimited
   global_per_day?: number; // 0 = unlimited; protects the LLM free-tier quota
+  max_in_flight?: number; // 0 = unlimited; bounds provider/socket bursts
   /** Trust CF-Connecting-IP / X-Forwarded-For for the client IP. Enable ONLY when
    * behind a trusted proxy (e.g. Cloudflare); otherwise clients can spoof per-IP limits. */
   trust_proxy?: boolean;
@@ -64,8 +85,15 @@ export const DEFAULT_CHAT: Required<ChatConfig> = {
   enabled: true,
   per_ip_per_hour: 30,
   global_per_day: 800,
+  max_in_flight: 8,
   trust_proxy: false,
 };
+
+function nonNegativeInteger(value: unknown, fallback: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.min(Math.floor(value), maximum)
+    : fallback;
+}
 
 function getPersonasDir(): string {
   // personas/ lives at the package root, one level above src/
@@ -110,7 +138,7 @@ export function defaultConfig(name: string): ArxiblogConfig {
       tagline: "어려운 논문을, 읽고 싶은 글로.",
     },
     build: { output_dir: SITE_DIR },
-    llm: { provider: "gemini", model: "gemini-3.1-flash-lite-preview", api_key: "", endpoint: "" },
+    llm: { provider: "gemini", model: defaultLlmModel("gemini"), api_key: "", endpoint: "" },
     deploy: { target: "gh-pages" },
     personas,
     active_persona: pickDefaultPersonaName(personas),
@@ -143,23 +171,103 @@ export function saveConfig(root: string, config: ArxiblogConfig): void {
   ordered.deploy = config.deploy;
   if (config.chat) ordered.chat = config.chat;
   if (config.personas) ordered.personas = config.personas;
-  Bun.write(join(root, CONFIG_FILE), stringify(ordered));
+  const destination = join(root, CONFIG_FILE);
+  const temporary = join(root, `.${CONFIG_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  try {
+    // The config contains API credentials. Write a complete, private temporary
+    // file first, then atomically replace the old config so readers never see a
+    // partially-written TOML document.
+    writeFileSync(temporary, stringify(ordered), { encoding: "utf-8", mode: 0o600 });
+    renameSync(temporary, destination);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
 }
 
 export function loadConfig(root: string): ArxiblogConfig {
   const content = readFileSync(join(root, CONFIG_FILE), "utf-8");
   const raw = parse(content) as Partial<ArxiblogConfig> & Record<string, unknown>;
-  if (!raw.llm) {
-    raw.llm = { provider: "gemini", model: "gemini-3.1-flash-lite-preview", api_key: "", endpoint: "" };
+
+  // Deep-merge section defaults so older or hand-edited configs do not crash
+  // commands merely because a newly introduced field/table is absent. Keep
+  // these scalar defaults inline instead of calling defaultConfig(), which
+  // would re-read every built-in persona file on each HTTP request.
+  raw.project = {
+    name: basename(resolve(root)),
+    created: new Date().toISOString().slice(0, 10),
+    tagline: "어려운 논문을, 읽고 싶은 글로.",
+    ...(raw.project || {}),
+  };
+  raw.build = { output_dir: SITE_DIR, ...(raw.build || {}) };
+  raw.llm = {
+    provider: "gemini",
+    model: defaultLlmModel("gemini"),
+    api_key: "",
+    endpoint: "",
+    ...(raw.llm || {}),
+  };
+  // Google shut the preview endpoint down on 2026-05-25. Transparently map
+  // projects created by earlier arxiblog releases to its stable replacement.
+  if (raw.llm.provider === "gemini" && raw.llm.model === "gemini-3.1-flash-lite-preview") {
+    raw.llm.model = defaultLlmModel("gemini");
   }
-  if (!raw.personas || !raw.personas.length) {
-    const builtins = loadBuiltinPersonas();
-    raw.personas = builtins.length > 0 ? builtins : [getDefaultPersona()];
-  }
+  raw.deploy = { target: "gh-pages", ...(raw.deploy || {}) };
+  const chat = (raw.chat || {}) as ChatConfig;
+  raw.chat = {
+    enabled: typeof chat.enabled === "boolean" ? chat.enabled : DEFAULT_CHAT.enabled,
+    per_ip_per_hour: nonNegativeInteger(chat.per_ip_per_hour, DEFAULT_CHAT.per_ip_per_hour, 100_000),
+    global_per_day: nonNegativeInteger(chat.global_per_day, DEFAULT_CHAT.global_per_day, 10_000_000),
+    max_in_flight: nonNegativeInteger(chat.max_in_flight, DEFAULT_CHAT.max_in_flight, 256),
+    trust_proxy: typeof chat.trust_proxy === "boolean" ? chat.trust_proxy : DEFAULT_CHAT.trust_proxy,
+  };
+  const personas = raw.personas?.length
+    ? raw.personas
+    : (() => {
+        const builtins = loadBuiltinPersonas();
+        return builtins.length ? builtins : [getDefaultPersona()];
+      })();
+  raw.personas = personas;
   if (!raw.active_persona) {
-    raw.active_persona = pickDefaultPersonaName(raw.personas);
+    raw.active_persona = pickDefaultPersonaName(personas);
   }
+  if (!raw.default_level) raw.default_level = "beginner";
   return raw as ArxiblogConfig;
+}
+
+/**
+ * Resolve the generated-site directory without allowing a config typo (or a
+ * symlinked parent) to escape the project and delete/serve unrelated files.
+ */
+export function resolveBuildOutputDir(root: string, configuredPath: string): string {
+  if (typeof configuredPath !== "string" || !configuredPath.trim()) {
+    throw new Error("build.output_dir는 비어 있지 않은 상대 경로여야 합니다.");
+  }
+  if (isAbsolute(configuredPath)) {
+    throw new Error("build.output_dir는 프로젝트 내부의 상대 경로여야 합니다.");
+  }
+
+  const projectRoot = realpathSync(resolve(root));
+  const outputDir = resolve(projectRoot, configuredPath);
+  const rel = relative(projectRoot, outputDir);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error("build.output_dir는 프로젝트 루트가 아닌 내부 디렉터리여야 합니다.");
+  }
+
+  // Resolve the nearest existing ancestor. This catches paths such as
+  // `public/site` when `public` is a symlink to a directory outside the project.
+  let ancestor = outputDir;
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  const effectiveOutput = resolve(realpathSync(ancestor), relative(ancestor, outputDir));
+  const effectiveRel = relative(projectRoot, effectiveOutput);
+  if (!effectiveRel || effectiveRel === ".." || effectiveRel.startsWith(`..${sep}`) || isAbsolute(effectiveRel)) {
+    throw new Error("build.output_dir가 프로젝트 외부를 가리키는 심볼릭 링크를 통과합니다.");
+  }
+
+  return outputDir;
 }
 
 export function findProjectRoot(from: string = process.cwd()): string {

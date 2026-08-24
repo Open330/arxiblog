@@ -9,47 +9,105 @@ const KIND_LABEL: Record<string, string> = {
   math: "수식·기호",
 };
 
-function head(title: string, description: string): string {
+interface HeadOptions {
+  assetPrefix?: string;
+  canonicalUrl?: string;
+  mathContent?: boolean;
+  noindex?: boolean;
+  ogType?: "article" | "website";
+  siteName?: string;
+  /** Absolute URL of the post's Open Graph image; "" or absent omits og:image. */
+  ogImage?: string;
+}
+
+export function safePublicUrl(base: string | undefined, relativePath = ""): string {
+  if (!base) return "";
+  try {
+    const url = new URL(base);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    url.hash = "";
+    url.search = "";
+    if (!url.pathname.endsWith("/")) url.pathname += "/";
+    return relativePath ? new URL(relativePath.replace(/^\/+/, ""), url).href : url.href;
+  } catch {
+    return "";
+  }
+}
+
+function safeCanonicalUrl(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    url.hash = "";
+    url.search = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+/** Absolute-on-origin prefix for assets that must work from an arbitrary 404 URL. */
+function publicBasePath(base: string | undefined): string {
+  if (!base) return "/";
+  try {
+    const url = new URL(base);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "/";
+    return url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
+  } catch {
+    return "/";
+  }
+}
+
+function head(title: string, description: string, opts: HeadOptions = {}): string {
+  const assetPrefix = opts.assetPrefix ?? "";
+  const canonicalUrl = safeCanonicalUrl(opts.canonicalUrl);
+  const ogImage = opts.ogImage || "";
+  const feedTitle = opts.siteName || "arxiblog";
   return `<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(description)}">
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
-<meta property="og:type" content="article">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<link rel="stylesheet" href="/static/style.css">
-<script>(function(){var t=localStorage.getItem("arxiblog-theme");if(t)document.documentElement.dataset.theme=t;})();</script>
+<meta property="og:type" content="${opts.ogType || "website"}">
+<meta property="og:locale" content="ko_KR">
+${opts.siteName ? `<meta property="og:site_name" content="${escapeHtml(opts.siteName)}">` : ""}
+${canonicalUrl ? `<meta property="og:url" content="${escapeHtml(canonicalUrl)}">\n<link rel="canonical" href="${escapeHtml(canonicalUrl)}">` : ""}
+${ogImage ? `<meta property="og:image" content="${escapeHtml(ogImage)}">\n<meta name="twitter:card" content="summary_large_image">` : `<meta name="twitter:card" content="summary">`}
+${opts.noindex ? `<meta name="robots" content="noindex,nofollow">` : ""}
+<link rel="icon" href="${assetPrefix}favicon.svg" type="image/svg+xml">
+<link rel="alternate" type="application/rss+xml" title="${escapeHtml(feedTitle)}" href="${assetPrefix}feed.xml">
+<link rel="stylesheet" href="${assetPrefix}static/fonts.css">
+${opts.mathContent ? `<link rel="stylesheet" href="${assetPrefix}static/vendor/katex/katex.min.css">` : ""}
+<link rel="stylesheet" href="${assetPrefix}static/style.css">
+<script>(function(){try{var t=localStorage.getItem("arxiblog-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 </head>`;
 }
 
-function siteHeader(): string {
+function siteHeader(homeHref: string, siteName: string): string {
   return `<header class="site-header">
   <div class="site-header-inner">
-    <a class="brand" href="/">arxi<span>blog</span></a>
-    <button id="theme-toggle" class="theme-toggle" aria-label="테마 전환">◐</button>
+    <a class="brand" href="${homeHref}" aria-label="${escapeHtml(siteName)} 홈">arxi<span>blog</span></a>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="테마 전환" aria-pressed="false"><span aria-hidden="true">◐</span></button>
   </div>
 </header>`;
 }
 
-function clientScripts(annotJson: string): string {
+function clientScripts(annotJson: string, assetPrefix: string, hasMath: boolean, hasMermaid: boolean): string {
+  const richScripts = [
+    hasMath ? `<script defer src="${assetPrefix}static/vendor/katex/katex.min.js"></script>
+<script defer src="${assetPrefix}static/vendor/katex/auto-render.min.js"></script>` : "",
+    hasMermaid ? `<script defer src="${assetPrefix}static/vendor/mermaid/mermaid.min.js"></script>` : "",
+    hasMath || hasMermaid ? `<script defer src="${assetPrefix}static/rich.js"></script>` : "",
+  ].filter(Boolean).join("\n");
   return `<script>window.__ARXIBLOG_ANNOTATIONS__ = ${annotJson};</script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
-  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}],throwOnError:false})"></script>
-<script type="module">
-  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  const dark = document.documentElement.dataset.theme === "dark" ||
-    (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
-  mermaid.initialize({ startOnLoad: true, securityLevel: "strict", theme: dark ? "dark" : "neutral", fontFamily: "Pretendard, sans-serif" });
-</script>
-<script defer src="/static/app.js"></script>`;
+<script defer src="${assetPrefix}static/app.js"></script>
+${richScripts}`;
 }
 
 // ── Post page ──
@@ -60,7 +118,11 @@ export function renderPostPage(opts: {
   bodyHtml: string;
   toc: Array<{ level: number; text: string; id: string }>;
   annotations: Annotation[];
+  hasMath?: boolean;
+  hasMermaid?: boolean;
   related?: Array<{ slug: string; title: string; arxiv_id?: string; reading_minutes?: number }>;
+  /** Absolute URL of this post's Open Graph image; "" or absent omits og:image. */
+  ogImage?: string;
 }): string {
   const { post, bodyHtml, toc, annotations, related = [] } = opts;
   const takeaways = safeParseArray(post.takeaways);
@@ -70,24 +132,28 @@ export function renderPostPage(opts: {
   const prerequisites = safeParseArray(post.prerequisites);
   const suggestedQuestions = safeParseArray(post.suggested_questions);
   const cats = splitCategories(post.categories);
-  const absUrl = `https://arxiv.org/abs/${post.arxiv_id}`;
-  const pdfUrl = `https://arxiv.org/pdf/${(post.arxiv_id || "").replace(/v\d+$/, "")}`;
+  const arxivId = (post.arxiv_id || "").trim();
+  const arxivPath = arxivId.split("/").map(encodeURIComponent).join("/");
+  const absUrl = `https://arxiv.org/abs/${arxivPath}`;
+  const pdfUrl = `https://arxiv.org/pdf/${arxivPath}`;
+  const description = post.subtitle || post.tldr || post.title;
+  const canonicalUrl = safePublicUrl(opts.config.project.url, `p/${encodeURIComponent(post.slug)}.html`);
 
   const tocItems = toc
     .map((h) => `<li class="lvl${h.level}"><a href="#${escapeHtml(h.id)}">${escapeHtml(h.text)}</a></li>`)
     .join("");
   const tocRail = toc.length
-    ? `<aside class="toc-rail"><nav class="toc"><div class="toc-title">목차</div><ul>${tocItems}</ul></nav></aside>`
+    ? `<aside class="toc-rail" aria-label="문서 목차"><nav class="toc" aria-label="이 글의 목차"><div class="toc-title" aria-hidden="true">목차</div><ul>${tocItems}</ul></nav></aside>`
     : "";
   const tocMobile = toc.length
     ? `<details class="toc-mobile"><summary>목차</summary><ul>${tocItems}</ul></details>`
     : "";
 
   const tldrBox = post.tldr
-    ? `<aside class="callout tldr"><div class="callout-label">TL;DR</div><p>${escapeHtml(post.tldr)}</p></aside>`
+    ? `<aside class="callout tldr" aria-labelledby="tldr-title"><h2 id="tldr-title" class="callout-label">TL;DR</h2><p>${escapeHtml(post.tldr)}</p></aside>`
     : "";
   const takeawaysBox = takeaways.length
-    ? `<aside class="callout takeaways"><div class="callout-label">한눈에 보기</div><ul>${takeaways
+    ? `<aside class="callout takeaways" aria-labelledby="takeaways-title"><h2 id="takeaways-title" class="callout-label">한눈에 보기</h2><ul>${takeaways
         .map((t) => `<li>${escapeHtml(t)}</li>`)
         .join("")}</ul></aside>`
     : "";
@@ -106,18 +172,18 @@ export function renderPostPage(opts: {
   ].join("");
   const reviewCard =
     reviewInner || post.who_should_read
-      ? `<section class="review-card">
-          <div class="review-head">📋 한눈에 리뷰</div>
+      ? `<section class="review-card" aria-labelledby="review-title">
+          <h2 id="review-title" class="review-head">📋 한눈에 리뷰</h2>
           <div class="review-grid">${reviewInner}</div>
           ${post.who_should_read ? `<div class="review-who">👤 ${escapeHtml(post.who_should_read)}</div>` : ""}
         </section>`
       : "";
 
   const chips = suggestedQuestions.length
-    ? `<section class="ask-chips">
-        <div class="ask-chips-label">💬 이런 게 궁금하다면 — 눌러서 AI에게 물어보세요</div>
+    ? `<section class="ask-chips" aria-labelledby="ask-chips-title">
+        <h2 id="ask-chips-title" class="ask-chips-label">💬 이런 게 궁금하다면 — 눌러서 AI에게 물어보세요</h2>
         <div class="ask-chips-row">${suggestedQuestions
-          .map((q) => `<button class="ask-chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
+          .map((q) => `<button class="ask-chip" type="button" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`)
           .join("")}</div>
       </section>`
     : "";
@@ -126,7 +192,7 @@ export function renderPostPage(opts: {
     ? `<section class="related"><h2>관련 글</h2><div class="related-list">${related
         .map(
           (r) =>
-            `<a class="related-item" href="/p/${escapeHtml(r.slug)}.html"><span class="related-title">${escapeHtml(
+            `<a class="related-item" href="./${encodeURIComponent(r.slug)}.html"><span class="related-title">${escapeHtml(
               r.title
             )}</span><span class="related-meta">arXiv:${escapeHtml(r.arxiv_id || "")}${
               r.reading_minutes ? " · " + r.reading_minutes + "분" : ""
@@ -151,28 +217,36 @@ export function renderPostPage(opts: {
     annotations.map((a) => ({ term: a.term, kind: a.kind, explanation: a.explanation }))
   );
 
-  return `${head(post.title, post.subtitle || post.tldr || post.title)}
+  return `${head(`${post.title} · ${opts.config.project.name}`, description, {
+    assetPrefix: "../",
+    canonicalUrl,
+    mathContent: opts.hasMath,
+    ogType: "article",
+    siteName: opts.config.project.name,
+    ogImage: opts.ogImage,
+  })}
 <body data-slug="${escapeHtml(post.slug)}">
-<div id="progress-bar" class="progress-bar"></div>
-${siteHeader()}
-<main class="post-shell">
-  <article class="post">
+<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+<div id="progress-bar" class="progress-bar" aria-hidden="true"></div>
+${siteHeader("../", opts.config.project.name)}
+<main id="main-content" class="post-shell">
+  <article class="post" aria-labelledby="post-title">
     <div class="post-meta">
       ${catHtml ? `<span class="cats">${catHtml}</span>` : ""}
       <span>${post.reading_minutes}분 읽기</span>
       <span class="level level-${escapeHtml(post.level)}">${post.level === "intermediate" ? "중급" : "입문"}</span>
     </div>
-    <h1 class="post-title">${escapeHtml(post.title)}</h1>
+    <h1 id="post-title" class="post-title">${escapeHtml(post.title)}</h1>
     ${post.subtitle ? `<p class="post-subtitle">${escapeHtml(post.subtitle)}</p>` : ""}
 
-    <div class="paper-card">
+    <aside class="paper-card" aria-label="원문 논문 정보">
       <span class="paper-card-tag">원문 논문</span>
       <span class="paper-card-title">${escapeHtml(post.paper_title || "")}</span>
       <span class="paper-card-links">
-        <a href="${absUrl}" target="_blank" rel="noopener">arXiv:${escapeHtml(post.arxiv_id || "")}</a>
-        <a href="${pdfUrl}" target="_blank" rel="noopener">PDF ↗</a>
+        <a href="${escapeHtml(absUrl)}" target="_blank" rel="noopener noreferrer" aria-label="arXiv 원문 보기(새 탭)">arXiv:${escapeHtml(arxivId)}</a>
+        <a href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer" aria-label="논문 PDF 보기(새 탭)">PDF ↗</a>
       </span>
-    </div>
+    </aside>
 
     ${tldrBox}
     ${takeawaysBox}
@@ -188,29 +262,30 @@ ${siteHeader()}
     ${relatedHtml}
 
     <footer class="post-footer">
-      이 글은 <a href="${absUrl}" target="_blank" rel="noopener">arXiv:${escapeHtml(post.arxiv_id || "")}</a> 논문을
+      이 글은 <a href="${escapeHtml(absUrl)}" target="_blank" rel="noopener noreferrer" aria-label="arXiv 원문 보기(새 탭)">arXiv:${escapeHtml(arxivId)}</a> 논문을
       <b>arxiblog</b>가 일반 독자용으로 다시 쓴 글입니다. 정확한 내용은 원문을 확인하세요.
     </footer>
   </article>
   ${tocRail}
 </main>
 
-<button id="chat-toggle" class="chat-toggle" aria-label="AI에게 물어보기"><span>💬</span> 물어보기</button>
-<div id="chat-panel" class="chat-panel" hidden>
+<button id="chat-toggle" class="chat-toggle" type="button" aria-label="AI 질문 창 열기" aria-controls="chat-panel" aria-expanded="false" aria-haspopup="dialog"><span aria-hidden="true">💬</span> 물어보기</button>
+<section id="chat-panel" class="chat-panel" role="dialog" aria-modal="true" aria-labelledby="chat-title" aria-describedby="chat-privacy" hidden>
   <div class="chat-head">
-    <span>이 논문, 뭐든 물어보세요</span>
-    <button id="chat-close" class="chat-close" aria-label="닫기">✕</button>
+    <h2 id="chat-title">이 논문, 뭐든 물어보세요</h2>
+    <button id="chat-close" class="chat-close" type="button" aria-label="AI 질문 창 닫기">✕</button>
   </div>
-  <div id="chat-log" class="chat-log">
+  <p id="chat-privacy" class="chat-privacy">질문·최근 대화·현재 글 맥락이 설정된 외부 AI 제공자에게 전송됩니다. 개인정보나 민감정보는 입력하지 마세요.</p>
+  <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="AI 대화 내용">
     <div class="chat-msg bot">읽다가 막히는 부분이 있으면 편하게 물어보세요. 이 논문과 글 내용을 바탕으로 답해 드릴게요.</div>
   </div>
   <form id="chat-form" class="chat-form">
-    <textarea id="chat-input" rows="1" placeholder="예: 핵심 아이디어를 한 문장으로?" autocomplete="off"></textarea>
-    <button type="submit" aria-label="보내기">↑</button>
+    <textarea id="chat-input" rows="1" placeholder="예: 핵심 아이디어를 한 문장으로?" aria-label="AI에게 할 질문" autocomplete="off" required></textarea>
+    <button type="submit" aria-label="질문 보내기">↑</button>
   </form>
-</div>
+</section>
 
-${clientScripts(annotJson)}
+${clientScripts(annotJson, "../", !!opts.hasMath, !!opts.hasMermaid)}
 </body>
 </html>`;
 }
@@ -219,12 +294,13 @@ ${clientScripts(annotJson)}
 
 export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] }): string {
   const { config, posts } = opts;
+  const canonicalUrl = safePublicUrl(config.project.url);
   const cards = posts
     .map((p) => {
       const cats = splitCategories(p.categories).slice(0, 3);
       const haystack = `${p.title} ${p.subtitle} ${p.tldr} ${p.categories || ""} ${p.arxiv_id || ""}`
         .toLowerCase();
-      return `<a class="card" href="/p/${escapeHtml(p.slug)}.html" data-search="${escapeHtml(haystack)}">
+      return `<a class="card" href="p/${encodeURIComponent(p.slug)}.html" data-search="${escapeHtml(haystack)}">
         <div class="card-meta">
           ${cats.map((c) => `<span class="cat">${escapeHtml(c)}</span>`).join("")}
           <span class="card-time">${p.reading_minutes}분</span>
@@ -242,13 +318,17 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
     <p class="empty-hint"><code>arxiblog add 2605.31264</code> 처럼 arXiv 논문을 추가해 보세요.</p>
   </div>`;
 
-  return `${head(config.project.name, config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로")}
+  return `${head(config.project.name, config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로", {
+    canonicalUrl,
+    siteName: config.project.name,
+  })}
 <body>
-${siteHeader()}
-<main class="home">
-  <section class="home-hero">
+<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+${siteHeader("./", config.project.name)}
+<main id="main-content" class="home">
+  <section class="home-hero" aria-labelledby="home-title">
     <span class="hero-badge">arXiv → 읽고 싶은 글</span>
-    <h1>${escapeHtml(config.project.name)}</h1>
+    <h1 id="home-title">${escapeHtml(config.project.name)}</h1>
     <p class="hero-sub">${escapeHtml(config.project.tagline || "어려운 논문을, 읽고 싶은 글로.")}</p>
     <p class="hero-desc">학계 사람이 아니어도 술술 읽히도록 논문을 다시 씁니다. 전문용어엔 자동 주석을, 흐름엔 도식을 붙이고, 읽다 막히면 옆의 AI에게 바로 물어보세요.</p>
     <div class="hero-steps">
@@ -257,19 +337,20 @@ ${siteHeader()}
       <div class="step"><span class="step-n">3</span><b>읽고 물어보기</b><span>맥락을 아는 AI 챗 내장</span></div>
     </div>
   </section>
-  <section class="home-list">
+  <section class="home-list" aria-labelledby="post-list-title">
     <div class="home-list-head">
-      <h2 class="home-list-title">${posts.length ? `글 ${posts.length}편` : "글"}</h2>
-      ${posts.length ? `<input id="post-search" class="post-search" type="search" placeholder="제목·요약·분야 검색…" autocomplete="off">` : ""}
+      <h2 id="post-list-title" class="home-list-title">${posts.length ? `글 ${posts.length}편` : "글"}</h2>
+      ${posts.length ? `<input id="post-search" class="post-search" type="search" placeholder="제목·요약·분야 검색…" aria-label="글 검색" aria-controls="cards search-status search-empty" autocomplete="off" enterkeyhint="search">` : ""}
     </div>
-    <div class="cards" id="cards">
+    <div class="cards" id="cards" aria-labelledby="post-list-title">
       ${posts.length ? cards : empty}
     </div>
-    <p id="search-empty" class="search-empty" hidden>검색 결과가 없습니다.</p>
+    <p id="search-status" class="search-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="search-empty" class="search-empty" hidden aria-hidden="true">검색 결과가 없습니다. 다른 검색어를 입력해 보세요.</p>
   </section>
 </main>
 <footer class="site-footer">arxiblog · arXiv 논문을 사람의 언어로</footer>
-<script defer src="/static/app.js"></script>
+<script defer src="static/app.js"></script>
 </body>
 </html>`;
 }
@@ -277,14 +358,21 @@ ${siteHeader()}
 // ── 404 page ──
 
 export function renderNotFoundPage(config: ArxiblogConfig): string {
-  return `${head("404 · " + config.project.name, "페이지를 찾을 수 없습니다")}
+  const basePath = publicBasePath(config.project.url);
+  return `${head("404 · " + config.project.name, "페이지를 찾을 수 없습니다", {
+    assetPrefix: basePath,
+    noindex: true,
+    siteName: config.project.name,
+  })}
 <body>
-${siteHeader()}
-<main class="notfound">
-  <div class="notfound-code">404</div>
+<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+${siteHeader(basePath, config.project.name)}
+<main id="main-content" class="notfound">
+  <h1 class="notfound-code">404</h1>
   <p>찾으시는 페이지가 없습니다.</p>
-  <p><a href="/">← 홈으로 돌아가기</a></p>
+  <p><a href="${basePath}">← 홈으로 돌아가기</a></p>
 </main>
+<script defer src="${basePath}static/app.js"></script>
 </body>
 </html>`;
 }
@@ -292,109 +380,332 @@ ${siteHeader()}
 // ── Admin page (served live in `serve` mode) ──
 
 export function renderAdminPage(config: ArxiblogConfig): string {
-  const personas = config.personas || [];
-  const personaOpts = personas
-    .map(
-      (p) =>
-        `<option value="${escapeHtml(p.name)}"${p.name === config.active_persona ? " selected" : ""}>${escapeHtml(
-          p.name
-        )} — ${escapeHtml(p.description)}</option>`
-    )
-    .join("");
+  const personaOpts = `<option value="">인증 후 불러오기</option>`;
   const provOpts = ["gemini", "anthropic", "openai", "azure-openai"]
-    .map((p) => `<option value="${p}"${p === config.llm.provider ? " selected" : ""}>${p}</option>`)
+    .map((p) => `<option value="${p}">${p}</option>`)
     .join("");
   const levelOpts = [
     ["beginner", "입문"],
     ["intermediate", "중급"],
   ]
-    .map(([v, l]) => `<option value="${v}"${v === config.default_level ? " selected" : ""}>${l}</option>`)
+    .map(([v, l]) => `<option value="${v}">${l}</option>`)
     .join("");
 
-  return `${head("관리 · " + config.project.name, "arxiblog 관리 페이지")}
+  return `${head("관리 · " + config.project.name, "arxiblog 관리 페이지", {
+    assetPrefix: "/",
+    noindex: true,
+    siteName: config.project.name,
+  })}
 <body class="admin-body">
-${siteHeader()}
-<main class="admin">
+<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+${siteHeader("/", config.project.name)}
+<main id="main-content" class="admin">
   <h1>관리</h1>
-  <p id="auth-note" class="admin-note"></p>
+  <p id="auth-note" class="admin-note" role="status" aria-live="polite"></p>
 
-  <section class="admin-card">
-    <h2>📥 논문 추가</h2>
-    <form id="add-form">
+  <section class="admin-card" aria-labelledby="add-title">
+    <h2 id="add-title">📥 논문 추가</h2>
+    <form id="add-form" aria-describedby="add-status">
       <label>arXiv ID 또는 URL
-        <input id="add-source" placeholder="2605.31264 또는 https://arxiv.org/abs/..." required>
+        <input id="add-source" name="source" inputmode="url" placeholder="2605.31264 또는 https://arxiv.org/abs/..." autocomplete="off" required>
       </label>
       <div class="row">
-        <label>페르소나<select id="add-persona">${personaOpts}</select></label>
-        <label>난이도<select id="add-level">${levelOpts}</select></label>
+        <label>페르소나<select id="add-persona" name="persona">${personaOpts}</select></label>
+        <label>난이도<select id="add-level" name="level">${levelOpts}</select></label>
       </div>
       <button type="submit">글 생성</button>
     </form>
-    <div id="add-status" class="status"></div>
+    <div id="add-status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
   </section>
 
-  <section class="admin-card">
-    <h2>⚙️ 설정</h2>
-    <form id="settings-form">
+  <section class="admin-card" aria-labelledby="settings-title">
+    <h2 id="settings-title">⚙️ 설정</h2>
+    <form id="settings-form" aria-describedby="settings-status">
       <div class="row">
-        <label>프로바이더<select id="set-provider">${provOpts}</select></label>
-        <label>모델<input id="set-model" value="${escapeHtml(config.llm.model)}"></label>
+        <label>프로바이더<select id="set-provider" name="provider" aria-describedby="provider-change-warning">${provOpts}</select></label>
+        <label>모델<input id="set-model" name="model" value="" autocomplete="off" required></label>
       </div>
-      <label>API Key <input id="set-key" type="password" placeholder="${config.llm.api_key ? "설정됨 — 변경할 때만 입력" : "미설정"}"></label>
-      <label>Azure Endpoint <span class="hint">(azure-openai만)</span><input id="set-endpoint" value="${escapeHtml(config.llm.endpoint || "")}"></label>
+      <p id="provider-change-warning" class="admin-note warn" role="alert" hidden>프로바이더를 변경하면 기존 API 키와 Endpoint가 삭제되고 모델 기본값이 바뀝니다. 새 프로바이더의 API 키와 모델을 확인해야 저장할 수 있습니다.</p>
+      <label>API Key <input id="set-key" name="api-key" type="password" placeholder="인증 후 상태 확인" autocomplete="new-password" spellcheck="false" aria-describedby="provider-change-warning"></label>
+      <label class="admin-check"><input id="set-clear-keys" name="clear-api-keys" type="checkbox"><span><b>저장된 API 키 모두 삭제</b><small>삭제 후 AI 기능은 새 키를 저장할 때까지 중단됩니다.</small></span></label>
+      <label>Azure Endpoint <span class="hint">(azure-openai만)</span><input id="set-endpoint" name="endpoint" type="url" value="" autocomplete="off" spellcheck="false"></label>
       <div class="row">
-        <label>기본 페르소나<select id="set-persona">${personaOpts}</select></label>
-        <label>기본 난이도<select id="set-level">${levelOpts}</select></label>
+        <label>기본 페르소나<select id="set-persona" name="active-persona">${personaOpts}</select></label>
+        <label>기본 난이도<select id="set-level" name="default-level">${levelOpts}</select></label>
       </div>
       <button type="submit">설정 저장</button>
     </form>
-    <div id="settings-status" class="status"></div>
+    <div id="settings-status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
   </section>
 
-  <section class="admin-card">
-    <h2>📝 글 목록</h2>
-    <div id="post-list" class="post-list">불러오는 중…</div>
+  <section class="admin-card" aria-labelledby="admin-post-list-title">
+    <h2 id="admin-post-list-title">📝 글 목록</h2>
+    <div id="post-list" class="post-list" aria-live="polite" aria-busy="true">불러오는 중…</div>
   </section>
 </main>
+<script defer src="/static/app.js"></script>
 <script>${adminScript()}</script>
 </body>
 </html>`;
 }
 
 function adminScript(): string {
-  return [
-    "(function(){",
-    "var u=new URL(location.href);var tok=u.searchParams.get('token');",
-    "if(tok){sessionStorage.setItem('arxiblog-admin-token',tok);history.replaceState({},'',location.pathname);}",
-    "var token=sessionStorage.getItem('arxiblog-admin-token')||'';",
-    "var note=document.getElementById('auth-note');",
-    "if(!token){note.textContent='\\u26a0 토큰이 없습니다. 콘솔에 출력된 /admin?token=... 주소로 접속하세요.';note.classList.add('warn');}",
-    "else{note.textContent='\\u2713 인증됨';note.classList.add('ok');}",
-    "function api(path,method,body){return fetch(path,{method:method||'GET',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:body?JSON.stringify(body):undefined});}",
-    "function esc(s){return (s||'').replace(/[&<>\"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c];});}",
-    "var addForm=document.getElementById('add-form');",
-    "addForm.addEventListener('submit',async function(e){e.preventDefault();",
-    " var src=document.getElementById('add-source').value.trim();if(!src)return;",
-    " var st=document.getElementById('add-status');var btn=addForm.querySelector('button');",
-    " btn.disabled=true;st.className='status busy';st.textContent='\\u23f3 논문을 가져와 글을 쓰는 중… (수십 초 걸릴 수 있어요)';",
-    " try{var r=await api('/api/add','POST',{source:src,persona:document.getElementById('add-persona').value,level:document.getElementById('add-level').value});",
-    "  var j=await r.json();",
-    "  if(!r.ok||j.error){st.className='status err';st.textContent='오류: '+(j.error||r.status);}",
-    "  else{st.className='status ok';st.innerHTML='\\u2705 <a href=\"/p/'+encodeURIComponent(j.slug)+'.html\">'+esc(j.title)+'</a> ('+j.annotations+'개 주석 · ~$'+(j.cost||0).toFixed(4)+')';document.getElementById('add-source').value='';loadPosts();}",
-    " }catch(err){st.className='status err';st.textContent='요청 실패: '+err.message;}",
-    " btn.disabled=false;",
-    "});",
-    "var setForm=document.getElementById('settings-form');",
-    "setForm.addEventListener('submit',async function(e){e.preventDefault();",
-    " var st=document.getElementById('settings-status');st.className='status busy';st.textContent='저장 중…';",
-    " var body={provider:document.getElementById('set-provider').value,model:document.getElementById('set-model').value,endpoint:document.getElementById('set-endpoint').value,active_persona:document.getElementById('set-persona').value,default_level:document.getElementById('set-level').value};",
-    " var k=document.getElementById('set-key').value;if(k)body.api_key=k;",
-    " try{var r=await api('/api/settings','POST',body);var j=await r.json();var ok=r.ok&&!j.error;st.className=ok?'status ok':'status err';st.textContent=ok?'\\u2705 저장됨':'오류: '+(j.error||r.status);document.getElementById('set-key').value='';}catch(err){st.className='status err';st.textContent='요청 실패: '+err.message;}",
-    "});",
-    "async function loadPosts(){var el=document.getElementById('post-list');try{var r=await fetch('/api/posts');var j=await r.json();var ps=j.posts||[];if(!ps.length){el.innerHTML='<p class=\"muted\">아직 글이 없습니다.</p>';return;}el.innerHTML=ps.map(function(p){return '<div class=\"post-row\"><a href=\"/p/'+encodeURIComponent(p.slug)+'.html\">'+esc(p.title)+'</a><span class=\"muted\">arXiv:'+esc(p.arxiv_id)+' \\u00b7 '+p.reading_minutes+'분</span><button data-slug=\"'+esc(p.slug)+'\">삭제</button></div>';}).join('');Array.prototype.forEach.call(el.querySelectorAll('button[data-slug]'),function(b){b.addEventListener('click',async function(){if(!confirm('이 글을 삭제할까요?'))return;b.disabled=true;var r=await api('/api/delete','POST',{slug:b.getAttribute('data-slug')});if(r.ok){loadPosts();}else{var j=await r.json();alert('오류: '+(j.error||r.status));b.disabled=false;}});});}catch(err){el.textContent='목록을 불러오지 못했습니다.';}}",
-    "loadPosts();",
-    "})();",
-  ].join("\n");
+  return `(function(){
+"use strict";
+var note=document.getElementById("auth-note");
+var url=new URL(location.href);
+var fragmentToken=url.hash.indexOf("#token=")===0?new URLSearchParams(url.hash.slice(1)).get("token"):"";
+var suppliedToken=fragmentToken||url.searchParams.get("token");
+var token="";
+try{
+  if(suppliedToken){
+    sessionStorage.setItem("arxiblog-admin-token",suppliedToken);
+    url.searchParams.delete("token");
+    url.hash="";
+    history.replaceState({},"",url.pathname+(url.searchParams.toString()?"?"+url.searchParams.toString():""));
+  }
+  token=sessionStorage.getItem("arxiblog-admin-token")||"";
+}catch(_err){
+  note.textContent="브라우저 저장소를 사용할 수 없어 관리자 인증을 유지할 수 없습니다.";
+  note.className="admin-note warn";
+}
+if(!note.textContent){
+  note.textContent=token?"인증 확인 중…":"⚠ 토큰이 없습니다. 콘솔에 출력된 /admin#token=... 주소로 접속하세요.";
+  note.className=token?"admin-note":"admin-note warn";
+}
+
+function api(path,method,body){
+  return fetch(path,{method:method||"GET",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:body?JSON.stringify(body):undefined});
+}
+async function readJson(response){
+  try{return await response.json();}catch(_err){return {};}
+}
+function errorMessage(error){
+  return error&&error.message?error.message:"알 수 없는 오류";
+}
+function setStatus(element,state,message){
+  element.className="status "+state;
+  element.textContent=message;
+}
+function setFormBusy(form,busy){
+  form.setAttribute("aria-busy",String(busy));
+  var button=form.querySelector('button[type="submit"]');
+  if(button)button.disabled=busy||!token||!configLoaded;
+}
+
+var addForm=document.getElementById("add-form");
+var setForm=document.getElementById("settings-form");
+var providerSelect=document.getElementById("set-provider");
+var keyInput=document.getElementById("set-key");
+var providerWarning=document.getElementById("provider-change-warning");
+var originalProvider="";
+var originalModel="";
+var configLoaded=false;
+var providerDefaults={gemini:"gemini-3.1-flash-lite",anthropic:"claude-sonnet-4-6",openai:"gpt-5.4-nano","azure-openai":"gpt-5.4-nano"};
+setFormBusy(addForm,true);
+setFormBusy(setForm,true);
+if(!token){
+  setFormBusy(addForm,false);
+  setFormBusy(setForm,false);
+}
+
+function providerChanged(){
+  return Boolean(originalProvider&&providerSelect.value!==originalProvider);
+}
+function syncProviderWarning(){
+  var changed=providerChanged();
+  providerWarning.hidden=!changed;
+  keyInput.setAttribute("aria-required",String(changed));
+  var modelInput=document.getElementById("set-model");
+  if(changed&&(modelInput.value===originalModel||!modelInput.value.trim()))modelInput.value=providerDefaults[providerSelect.value]||"";
+  if(!changed&&originalModel)modelInput.value=originalModel;
+}
+providerSelect.addEventListener("change",syncProviderWarning);
+
+function replaceOptions(select,items,value,label){
+  select.replaceChildren();
+  items.forEach(function(item){
+    var option=document.createElement("option");
+    option.value=item.name;
+    option.textContent=label(item);
+    option.selected=item.name===value;
+    select.appendChild(option);
+  });
+}
+
+async function loadSettings(){
+  if(!token)return;
+  try{
+    var response=await api("/api/config","GET");
+    var result=await readJson(response);
+    if(!response.ok)throw new Error(result.error||String(response.status));
+    originalProvider=result.provider||"gemini";
+    providerSelect.value=originalProvider;
+    syncProviderWarning();
+    originalModel=result.model||"";
+    document.getElementById("set-model").value=originalModel;
+    document.getElementById("set-endpoint").value=result.endpoint||"";
+    document.getElementById("set-key").placeholder=result.hasKey?"설정됨 — 변경할 때만 입력":"미설정";
+    var personas=Array.isArray(result.personas)?result.personas:[];
+    replaceOptions(document.getElementById("add-persona"),personas,result.active_persona,function(item){return item.name+" — "+(item.description||"");});
+    replaceOptions(document.getElementById("set-persona"),personas,result.active_persona,function(item){return item.name+" — "+(item.description||"");});
+    document.getElementById("add-level").value=result.default_level||"beginner";
+    document.getElementById("set-level").value=result.default_level||"beginner";
+    configLoaded=true;
+    note.textContent="✓ 인증됨";
+    note.className="admin-note ok";
+    setFormBusy(addForm,false);
+    setFormBusy(setForm,false);
+  }catch(_error){
+    try{sessionStorage.removeItem("arxiblog-admin-token");}catch(_err){}
+    token="";
+    note.textContent="⚠ 관리자 인증에 실패했습니다. 콘솔의 새 /admin#token=... 주소로 다시 접속하세요.";
+    note.className="admin-note warn";
+  }
+}
+
+addForm.addEventListener("submit",async function(event){
+  event.preventDefault();
+  var source=document.getElementById("add-source").value.trim();
+  if(!source||!token)return;
+  var status=document.getElementById("add-status");
+  setFormBusy(addForm,true);
+  setStatus(status,"busy","⏳ 논문을 가져와 글을 쓰는 중… (수십 초 걸릴 수 있어요)");
+  try{
+    var response=await api("/api/add","POST",{source:source,persona:document.getElementById("add-persona").value,level:document.getElementById("add-level").value});
+    var result=await readJson(response);
+    if(!response.ok||result.error){
+      if(response.status===502||response.status===504){
+        setStatus(status,"err","연결이 끝났지만 처리가 계속됐을 수 있습니다. 중복 비용을 피하려면 글 목록을 먼저 확인한 뒤 재시도하세요.");
+      }else{
+        setStatus(status,"err","오류: "+(result.error||response.status));
+      }
+    }else{
+      status.className="status ok";
+      status.textContent="✅ ";
+      var link=document.createElement("a");
+      link.href="/p/"+encodeURIComponent(result.slug)+".html";
+      link.textContent=result.title||"생성한 글";
+      status.appendChild(link);
+      status.appendChild(document.createTextNode(" ("+(Number(result.annotations)||0)+"개 주석 · 참고용 예상 ~$"+(Number(result.cost)||0).toFixed(4)+")"));
+      document.getElementById("add-source").value="";
+      loadPosts();
+    }
+  }catch(_error){
+    setStatus(status,"err","요청 연결이 끊겼지만 처리가 계속됐을 수 있습니다. 중복 비용을 피하려면 글 목록을 먼저 확인한 뒤 재시도하세요.");
+  }finally{
+    setFormBusy(addForm,false);
+  }
+});
+
+setForm.addEventListener("submit",async function(event){
+  event.preventDefault();
+  if(!token)return;
+  var status=document.getElementById("settings-status");
+  var clearKeys=document.getElementById("set-clear-keys");
+  if(clearKeys.checked&&keyInput.value){
+    setStatus(status,"err","새 API 키 입력과 저장된 키 삭제를 동시에 선택할 수 없습니다.");
+    return;
+  }
+  if(providerChanged()&&!keyInput.value){
+    setStatus(status,"err","프로바이더를 변경하려면 새 프로바이더의 API 키를 입력하세요.");
+    keyInput.focus();
+    return;
+  }
+  if(providerChanged()&&!confirm("프로바이더를 변경하면 기존 API 키와 Endpoint가 삭제됩니다. 새 프로바이더로 변경할까요?"))return;
+  var endpointInput=document.getElementById("set-endpoint").value.trim();
+  var nextEndpoint=providerChanged()&&providerSelect.value!=="azure-openai"?"":endpointInput;
+  var body={provider:providerSelect.value,model:document.getElementById("set-model").value.trim(),endpoint:nextEndpoint,active_persona:document.getElementById("set-persona").value,default_level:document.getElementById("set-level").value,clear_api_keys:clearKeys.checked};
+  if(keyInput.value)body.api_key=keyInput.value;
+  setFormBusy(setForm,true);
+  setStatus(status,"busy","저장 중…");
+  try{
+    var response=await api("/api/settings","POST",body);
+    var result=await readJson(response);
+    if(response.ok&&!result.error){
+      setStatus(status,"ok","✅ 저장됨");
+      originalProvider=body.provider;
+      originalModel=body.model;
+      syncProviderWarning();
+      keyInput.placeholder=clearKeys.checked?"미설정":(keyInput.value?"설정됨 — 변경할 때만 입력":keyInput.placeholder);
+      keyInput.value="";
+      clearKeys.checked=false;
+    }else{
+      setStatus(status,"err","오류: "+(result.error||response.status));
+    }
+  }catch(error){
+    setStatus(status,"err","요청 실패: "+errorMessage(error));
+  }finally{
+    setFormBusy(setForm,false);
+  }
+});
+
+async function deletePost(button,row,slug,title){
+  if(!token||!confirm("‘"+title+"’ 글을 삭제할까요?"))return;
+  button.disabled=true;
+  button.textContent="삭제 중…";
+  try{
+    var response=await api("/api/delete","POST",{slug:slug});
+    var result=await readJson(response);
+    if(response.ok&&!result.error){
+      await loadPosts();
+      return;
+    }
+    throw new Error(result.error||String(response.status));
+  }catch(error){
+    button.disabled=false;
+    button.textContent="다시 삭제";
+    var failure=row.querySelector(".delete-error")||document.createElement("span");
+    failure.className="status err delete-error";
+    failure.setAttribute("role","alert");
+    failure.textContent="삭제 실패: "+errorMessage(error);
+    if(!failure.parentNode)row.appendChild(failure);
+  }
+}
+
+async function loadPosts(){
+  var list=document.getElementById("post-list");
+  list.setAttribute("aria-busy","true");
+  try{
+    var response=await fetch("/api/posts");
+    var result=await readJson(response);
+    if(!response.ok)throw new Error(result.error||String(response.status));
+    var posts=Array.isArray(result.posts)?result.posts:[];
+    list.replaceChildren();
+    if(!posts.length){
+      var empty=document.createElement("p");
+      empty.className="muted";
+      empty.textContent="아직 글이 없습니다.";
+      list.appendChild(empty);
+      return;
+    }
+    posts.forEach(function(post){
+      var row=document.createElement("div");
+      row.className="post-row";
+      var link=document.createElement("a");
+      link.href="/p/"+encodeURIComponent(post.slug)+".html";
+      link.textContent=post.title||"제목 없는 글";
+      var meta=document.createElement("span");
+      meta.className="muted";
+      meta.textContent="arXiv:"+(post.arxiv_id||"")+" · "+(Number(post.reading_minutes)||0)+"분";
+      var button=document.createElement("button");
+      button.type="button";
+      button.textContent="삭제";
+      button.disabled=!token;
+      button.setAttribute("aria-label","‘"+(post.title||"제목 없는 글")+"’ 삭제");
+      button.addEventListener("click",function(){deletePost(button,row,post.slug,post.title||"제목 없는 글");});
+      row.append(link,meta,button);
+      list.appendChild(row);
+    });
+  }catch(_error){
+    list.textContent="목록을 불러오지 못했습니다. 페이지를 새로고침해 주세요.";
+  }finally{
+    list.setAttribute("aria-busy","false");
+  }
+}
+loadSettings();
+loadPosts();
+})();`;
 }
 
 /** Serialize a value for safe embedding inside an inline <script> element. */

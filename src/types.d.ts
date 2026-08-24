@@ -3,3 +3,6 @@ declare module "gh-pages";
 
 // pdf-parse's deep entry point (imported directly to dodge its index.js debug branch).
 declare module "pdf-parse/lib/pdf-parse.js";
+
+// playwright is an optional build-time dep for OG PNG rendering (SVG fallback otherwise).
+declare module "playwright";

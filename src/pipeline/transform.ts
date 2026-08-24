@@ -1,7 +1,7 @@
 import type { LLMClient } from "../llm-client";
 import type { Persona } from "../config";
 import type { ArxivMeta } from "../ingest/arxiv";
-import { parseLlmJson, estimateReadingMinutes, slugify } from "../utils";
+import { parseLlmJson, estimateReadingMinutes, representativeText, slugify } from "../utils";
 
 export interface BlogResult {
   title: string;
@@ -101,9 +101,11 @@ content 안의 mermaid 코드펜스 줄바꿈은 \\n 으로 정확히 이스케�
 }
 
 function buildUserPrompt(meta: ArxivMeta, rawText: string): string {
-  const body = rawText.slice(0, MAX_BODY_CHARS);
+  const body = representativeText(rawText, MAX_BODY_CHARS);
   const truncatedNote =
-    rawText.length > MAX_BODY_CHARS ? "\n\n[본문이 길어 일부만 제공됨 — 도입부와 핵심 위주로 작성하세요]" : "";
+    rawText.length > MAX_BODY_CHARS
+      ? "\n\n[본문이 길어 도입부·중간·결론을 나누어 발췌함 — 제공된 근거 밖의 내용은 단정하지 마세요]"
+      : "";
   return `다음 arXiv 논문을 위 지침에 따라 "논문 읽기 블로그" 글로 옮겨주세요.
 
 제목: ${meta.title}
@@ -129,40 +131,76 @@ export async function transformToBlog(
   const user = buildUserPrompt(meta, rawText);
   const raw = await llm.chatComplete(system, user, 16_384);
 
-  let parsed: Partial<BlogResult>;
+  let parsed: unknown;
   try {
-    parsed = parseLlmJson<Partial<BlogResult>>(raw);
+    parsed = parseLlmJson(raw);
   } catch (e) {
     throw new Error(
       `LLM 응답을 JSON으로 파싱하지 못했습니다. 모델을 더 큰 것으로 바꾸거나 다시 시도해 주세요.\n${(e as Error).message}`
     );
   }
 
-  const content = (parsed.content || "").trim();
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LLM 응답 형식이 객체가 아닙니다. 다시 시도해 주세요.");
+  }
+  const value = parsed as Record<string, unknown>;
+  const stringField = (name: string, fallback = ""): string => {
+    const field = value[name];
+    if (field === undefined || field === null || field === "") return fallback;
+    if (typeof field !== "string") {
+      throw new Error(`LLM 응답의 ${name} 필드가 문자열이 아닙니다. 다시 시도해 주세요.`);
+    }
+    return field.trim();
+  };
+  const stringArray = (name: string): string[] => {
+    const field = value[name];
+    if (field === undefined || field === null) return [];
+    if (!Array.isArray(field) || field.some((item) => typeof item !== "string")) {
+      throw new Error(`LLM 응답의 ${name} 필드가 문자열 배열이 아닙니다. 다시 시도해 주세요.`);
+    }
+    return field.map((item) => item.trim()).filter(Boolean);
+  };
+
+  const content = stringField("content");
   if (!content) throw new Error("LLM이 빈 본문을 반환했습니다. 다시 시도해 주세요.");
 
-  const annotations = (parsed.annotations || [])
-    .filter((a) => a && a.term && a.explanation)
-    .map((a) => ({ term: a.term.trim(), kind: a.kind || "jargon", explanation: a.explanation.trim() }));
+  const rawAnnotations = value.annotations ?? [];
+  if (!Array.isArray(rawAnnotations)) {
+    throw new Error("LLM 응답의 annotations 필드가 배열이 아닙니다. 다시 시도해 주세요.");
+  }
+  const annotationKinds = new Set(["jargon", "concept", "context", "math"]);
+  const annotations = rawAnnotations.map((annotation, index) => {
+    if (!annotation || typeof annotation !== "object" || Array.isArray(annotation)) {
+      throw new Error(`LLM 응답의 annotations[${index}] 형식이 올바르지 않습니다. 다시 시도해 주세요.`);
+    }
+    const item = annotation as Record<string, unknown>;
+    if (typeof item.term !== "string" || typeof item.explanation !== "string") {
+      throw new Error(`LLM 응답의 annotations[${index}]에 term/explanation 문자열이 필요합니다.`);
+    }
+    const term = item.term.trim();
+    const explanation = item.explanation.trim();
+    if (!term || !explanation) {
+      throw new Error(`LLM 응답의 annotations[${index}]가 비어 있습니다. 다시 시도해 주세요.`);
+    }
+    const kind = typeof item.kind === "string" && annotationKinds.has(item.kind) ? item.kind : "jargon";
+    return { term, kind, explanation };
+  });
 
-  const strArr = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter(Boolean).map((x) => String(x).trim()).filter(Boolean) : [];
-
-  const title = (parsed.title || meta.title).trim();
+  const title = stringField("title", meta.title);
   return {
     title,
-    subtitle: (parsed.subtitle || "").trim(),
-    tldr: (parsed.tldr || "").trim(),
-    takeaways: strArr(parsed.takeaways),
+    subtitle: stringField("subtitle"),
+    tldr: stringField("tldr"),
+    takeaways: stringArray("takeaways"),
     level,
     content,
     annotations,
-    contributions: strArr(parsed.contributions),
-    strengths: strArr(parsed.strengths),
-    limitations: strArr(parsed.limitations),
-    prerequisites: strArr(parsed.prerequisites),
-    who_should_read: (parsed.who_should_read || "").trim(),
-    suggested_questions: strArr(parsed.suggested_questions).slice(0, 5),
+    contributions: stringArray("contributions"),
+    strengths: stringArray("strengths"),
+    limitations: stringArray("limitations"),
+    prerequisites: stringArray("prerequisites"),
+    who_should_read: stringField("who_should_read"),
+    suggested_questions: stringArray("suggested_questions").slice(0, 5),
   };
 }
 

@@ -15,6 +15,73 @@ export interface ArxivMeta {
 }
 
 const UA = "arxiblog/0.1 (https://github.com/open330/arxiblog)";
+const META_TIMEOUT_MS = 20_000;
+const PDF_TIMEOUT_MS = 60_000;
+export const MAX_PDF_BYTES = 50 * 1024 * 1024;
+const MAX_EXTRACTED_TEXT_CHARS = 500_000;
+export const PDF_PARSE_TIMEOUT_MS = 45_000;
+
+type PdfWorkerResponse =
+  | { ok: true; text: string }
+  | { ok: false; error: string };
+
+type PdfWorkerFactory = () => Worker;
+
+/**
+ * Parse untrusted PDFs outside the server's main event loop. pdf-parse/PDF.js is
+ * CPU-heavy synchronous work in places, so a deadline must terminate the worker
+ * instead of allowing one malformed document to stall chat/admin traffic.
+ */
+export function parsePdfInWorker(
+  bytes: Buffer,
+  timeoutMs = PDF_PARSE_TIMEOUT_MS,
+  createWorker: PdfWorkerFactory = () =>
+    new Worker(new URL("./pdf-worker.ts", import.meta.url).href, { type: "module" })
+): Promise<string> {
+  return new Promise((resolve) => {
+    let worker: Worker;
+    try {
+      worker = createWorker();
+    } catch {
+      resolve("");
+      return;
+    }
+
+    let settled = false;
+    const finish = (text: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate();
+      resolve(text.slice(0, MAX_EXTRACTED_TEXT_CHARS));
+    };
+    const timer = setTimeout(() => finish(""), Math.max(1, timeoutMs));
+
+    worker.onmessage = (event: MessageEvent<PdfWorkerResponse>) => {
+      const message = event.data;
+      finish(message?.ok && typeof message.text === "string" ? message.text : "");
+    };
+    worker.onerror = () => finish("");
+
+    try {
+      // Transfer the Buffer's backing allocation without copying when it is
+      // already exact-sized (Buffer.concat normally is). A pooled/sliced Buffer
+      // gets one exact copy so unrelated bytes are never exposed to the worker.
+      const transferable =
+        bytes.buffer instanceof ArrayBuffer &&
+        bytes.byteOffset === 0 &&
+        bytes.byteLength === bytes.buffer.byteLength
+          ? bytes.buffer
+          : Uint8Array.from(bytes).buffer;
+      worker.postMessage(
+        { bytes: transferable, maxChars: MAX_EXTRACTED_TEXT_CHARS },
+        [transferable]
+      );
+    } catch {
+      finish("");
+    }
+  });
+}
 
 /** Allow only https arxiv.org hosts — prevents SSRF if a URL/redirect points elsewhere. */
 function assertArxivHost(u: string): URL {
@@ -33,53 +100,93 @@ function assertArxivHost(u: string): URL {
  */
 export function parseArxivId(input: string): string {
   const s = input.trim();
+  const invalid = (): never => {
+    throw new Error(`올바른 arXiv ID 또는 URL이 아닙니다: ${s || "(빈 값)"}`);
+  };
 
-  // Full URL forms: /abs/<id>, /pdf/<id>, /html/<id>
-  const urlMatch = s.match(/arxiv\.org\/(?:abs|pdf|html|format)\/(.+?)(?:\.pdf)?(?:[?#].*)?$/i);
-  if (urlMatch) return normalizeId(urlMatch[1]);
+  if (!s) return invalid();
 
   // arXiv:<id> prefix
   const prefixMatch = s.match(/^arxiv:\s*(.+)$/i);
   if (prefixMatch) return normalizeId(prefixMatch[1]);
 
+  // Full URL forms: /abs/<id>, /pdf/<id>, /html/<id>. Parse the host rather
+  // than searching the raw string so `notarxiv.org` or a query containing an
+  // arxiv-looking URL cannot be mistaken for a valid source.
+  const hasScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(s);
+  const bareArxivUrl = /^(?:[\w-]+\.)*arxiv\.org\//i.test(s);
+  if (hasScheme || bareArxivUrl) {
+    let url: URL;
+    try {
+      url = new URL(hasScheme ? s : `https://${s}`);
+    } catch {
+      return invalid();
+    }
+    const host = url.hostname.toLowerCase();
+    if (!['http:', 'https:'].includes(url.protocol) || (host !== "arxiv.org" && !host.endsWith(".arxiv.org"))) {
+      return invalid();
+    }
+    let path: string;
+    try {
+      path = decodeURIComponent(url.pathname);
+    } catch {
+      return invalid();
+    }
+    const match = path.match(/^\/(?:abs|pdf|html|format)\/(.+?)(?:\.pdf)?\/?$/i);
+    if (!match) return invalid();
+    return normalizeId(match[1]);
+  }
+
   return normalizeId(s);
 }
 
 function normalizeId(raw: string): string {
-  let id = raw.trim().replace(/\.pdf$/i, "");
+  const id = raw.trim().replace(/\.pdf$/i, "");
   // New-style: 2401.12345 or 2401.12345v2
   const newStyle = id.match(/^(\d{4}\.\d{4,5})(v\d+)?$/);
   if (newStyle) return id; // keep version if present
   // Old-style: archive.subclass/YYMMNNN  (e.g. math.GT/0309136, hep-th/9901001)
   const oldStyle = id.match(/^([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?$/i);
   if (oldStyle) return id;
-  // Fall back to the raw token; the API will reject if invalid
-  return id;
-}
-
-/** Strip a trailing version (v2) for metadata lookup, which expects the base id. */
-function baseId(id: string): string {
-  return id.replace(/v\d+$/, "");
+  throw new Error(`올바른 arXiv ID 또는 URL이 아닙니다: ${id || "(빈 값)"}`);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Fetch with polite backoff — arXiv's API rate-limits (429/503) frequent callers. */
-async function fetchWithRetry(url: string, maxRetries = 4): Promise<Response> {
-  for (let attempt = 0; ; attempt++) {
-    const resp = await fetch(url, { headers: { "User-Agent": UA } });
-    if ((resp.status === 429 || resp.status === 503) && attempt < maxRetries) {
-      await sleep(3000 * (attempt + 1)); // arXiv asks for ~3s spacing
-      continue;
+/** Fetch with polite backoff — arXiv's API rate-limits (429/503) and its search
+ *  endpoint is often slow, so retry on 429/503 AND on network timeouts/errors. */
+async function fetchWithRetry(url: string, maxRetries = 4, timeoutMs = META_TIMEOUT_MS): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const resp = await fetch(url, {
+        headers: { "User-Agent": UA },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if ((resp.status === 429 || resp.status === 503) && attempt < maxRetries) {
+        try { await resp.body?.cancel(); } catch { /* best effort */ }
+        await sleep(3000 * (attempt + 1)); // arXiv asks for ~3s spacing
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      // AbortError (timeout) or a transient network error — back off and retry.
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await sleep(3000 * (attempt + 1));
+        continue;
+      }
     }
-    return resp;
   }
+  throw lastErr ?? new Error("arXiv 요청에 반복 실패했습니다.");
 }
 
 /** Fetch metadata from the arXiv Atom API. Parses the XML with light regex (no XML dep). */
 export async function fetchArxivMeta(arxivId: string): Promise<ArxivMeta> {
-  const lookup = baseId(arxivId);
-  const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(lookup)}&max_results=1`;
+  // Preserve an explicitly requested vN in both metadata and PDF lookup. This
+  // keeps generated posts reproducible instead of silently mixing a v1 label
+  // with the latest paper revision.
+  const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}&max_results=1`;
   const resp = await fetchWithRetry(url);
   if (!resp.ok) throw new Error(`arXiv API error (${resp.status})`);
   const xml = await resp.text();
@@ -119,7 +226,7 @@ export async function fetchArxivMeta(arxivId: string): Promise<ArxivMeta> {
     categories,
     published,
     absUrl: `https://arxiv.org/abs/${canonicalId}`,
-    pdfUrl: `https://arxiv.org/pdf/${baseId(canonicalId)}`,
+    pdfUrl: `https://arxiv.org/pdf/${canonicalId}`,
   };
 }
 
@@ -130,36 +237,58 @@ export async function fetchArxivFullText(pdfUrl: string): Promise<string> {
     let current = assertArxivHost(pdfUrl).href;
     let resp: Response | null = null;
     for (let i = 0; i < 5; i++) {
-      resp = await fetch(current, { headers: { "User-Agent": UA }, redirect: "manual" });
+      resp = await fetch(current, {
+        headers: { "User-Agent": UA },
+        redirect: "manual",
+        signal: AbortSignal.timeout(PDF_TIMEOUT_MS),
+      });
       if (resp.status >= 300 && resp.status < 400) {
         const loc = resp.headers.get("location");
         if (!loc) return "";
+        try { await resp.body?.cancel(); } catch { /* best effort */ }
         current = assertArxivHost(new URL(loc, current).href).href;
         continue;
       }
       break;
     }
     if (!resp || !resp.ok) return "";
-    const buf = Buffer.from(await resp.arrayBuffer());
+    const buf = await readResponseBytes(resp, MAX_PDF_BYTES);
 
-    let pdfParseModule: Record<string, unknown>;
-    try {
-      // Import the library entry directly: pdf-parse@1.1.1's index.js runs a
-      // debug branch that reads a bundled test file when imported as a module.
-      pdfParseModule = await import("pdf-parse/lib/pdf-parse.js");
-    } catch {
-      try {
-        pdfParseModule = await import("pdf-parse");
-      } catch {
-        return "";
-      }
-    }
-    const pdfParse = (pdfParseModule.default ?? pdfParseModule) as (b: Buffer) => Promise<{ text: string }>;
-    const data = await pdfParse(buf);
-    return cleanPdfText(data.text || "");
+    return cleanPdfText(await parsePdfInWorker(buf));
   } catch {
     return "";
   }
+}
+
+/** Read a response without allowing a missing/false Content-Length to bypass the cap. */
+async function readResponseBytes(resp: Response, maxBytes: number): Promise<Buffer> {
+  const declared = Number(resp.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try { await resp.body?.cancel(); } catch { /* best effort */ }
+    throw new Error(`PDF가 허용 크기(${maxBytes} bytes)를 초과합니다.`);
+  }
+
+  if (!resp.body) return Buffer.alloc(0);
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error(`PDF가 허용 크기(${maxBytes} bytes)를 초과합니다.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  // Buffer.concat accepts Uint8Array directly; wrapping every chunk in a new
+  // Buffer would copy the entire PDF once here and again during concatenation.
+  return Buffer.concat(chunks, total);
 }
 
 /** Collapse hyphenation/line noise common in PDF extraction. */
@@ -191,4 +320,49 @@ function decodeXml(s: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
+}
+
+/**
+ * Fetch the most recent arXiv listing for one or more categories, newest first.
+ * Returns canonical ids (URL prefix and version suffix stripped) with titles.
+ * Used by the `digest` command to batch-generate posts. Goes through
+ * fetchWithRetry so the API's 429/503 rate limits back off politely.
+ */
+export async function fetchArxivListing(
+  categories: string[],
+  count: number
+): Promise<Array<{ arxivId: string; title: string }>> {
+  const cats = categories.map((c) => c.trim()).filter(Boolean);
+  if (cats.length === 0) return [];
+  const max = Math.max(1, Math.floor(count));
+
+  // e.g. "cat:cs.LG OR cat:cs.CL" — URL-encoded as a single search_query value.
+  const searchQuery = cats.map((c) => `cat:${c}`).join(" OR ");
+  const url =
+    `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(searchQuery)}` +
+    `&sortBy=submittedDate&sortOrder=descending&start=0&max_results=${max}`;
+
+  // The search endpoint is slower than id_list lookups — allow a longer per-try timeout.
+  const resp = await fetchWithRetry(url, 4, 45_000);
+  if (!resp.ok) throw new Error(`arXiv API error (${resp.status})`);
+  const xml = await resp.text();
+
+  const results: Array<{ arxivId: string; title: string }> = [];
+  const entryRe = /<entry\b[^>]*>([\s\S]*?)<\/entry>/g;
+  let m: RegExpExecArray | null;
+  while ((m = entryRe.exec(xml)) !== null) {
+    const entry = m[1];
+    // <id>http://arxiv.org/abs/2401.12345v2</id> → strip URL prefix and vN suffix.
+    const arxivId = (sliceTag(entry, "id") || "")
+      .trim()
+      .replace(/^https?:\/\/arxiv\.org\/abs\//i, "")
+      .replace(/v\d+$/i, "")
+      .trim();
+    if (!arxivId) continue;
+    const title = decodeXml(stripTags(sliceTag(entry, "title") || ""))
+      .replace(/\s+/g, " ")
+      .trim();
+    results.push({ arxivId, title });
+  }
+  return results;
 }

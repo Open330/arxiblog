@@ -5,6 +5,7 @@ import { existsSync } from "fs";
 import {
   CONFIG_FILE,
   DB_FILE,
+  defaultLlmModel,
   defaultConfig,
   findProjectRoot,
   hasLlmKey,
@@ -60,14 +61,7 @@ program
             ],
           }),
         model: ({ results }: { results: { provider?: string } }) => {
-          const def =
-            results.provider === "gemini"
-              ? "gemini-3.1-flash-lite-preview"
-              : results.provider === "anthropic"
-              ? "claude-sonnet-4-6"
-              : results.provider === "openai"
-              ? "gpt-5.4-nano"
-              : "gpt-5.4-nano";
+          const def = defaultLlmModel(results.provider || "gemini");
           return p.text({ message: "모델명", placeholder: def, initialValue: def });
         },
         apiKey: () => p.password({ message: "API Key", validate: (v) => (!v?.trim() ? "API Key를 입력해주세요" : undefined) }),
@@ -126,7 +120,69 @@ program
       console.log(C.green(`✅ "${result.title}"`));
       console.log(`   ${C.dim(`${result.annotationCount}개 용어 주석 · ${result.minutes}분 읽기 · /p/${result.slug}.html`)}`);
       console.log(
-        C.dim(`   토큰 ${result.usage.totalTokens.toLocaleString()} · ~$${result.cost.toFixed(4)}`)
+        C.dim(`   토큰 ${result.usage.totalTokens.toLocaleString()} · 참고용 예상 ~$${result.cost.toFixed(4)} (실제 청구와 다를 수 있음)`)
+      );
+
+      if (opts.build !== false) {
+        const { buildSite } = await import("./build/renderer");
+        const n = await buildSite(store, config, root);
+        console.log(C.green(`🛠  사이트 빌드 완료 (${n}개 글). 'arxiblog serve'로 확인하세요.`));
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+// ── digest ──
+program
+  .command("digest")
+  .description("최신 arXiv 논문 여러 편을 한 번에 블로그 글로 변환합니다")
+  .option("-c, --categories <list>", "arXiv 카테고리 (쉼표로 구분)", "cs.LG,cs.CL,cs.AI")
+  .option("-n, --count <n>", "생성할 글 개수", "3")
+  .option("-l, --level <level>", "난이도: beginner | intermediate")
+  .option("-p, --persona <name>", "글쓰기 페르소나 이름")
+  .option("--no-build", "변환 후 사이트를 다시 빌드하지 않음")
+  .action(async (opts: { categories: string; count: string; level?: string; persona?: string; build?: boolean }) => {
+    const root = findProjectRoot();
+    const config = loadConfig(root);
+
+    if (!hasLlmKey(config.llm)) {
+      console.log(C.red("LLM API 키가 설정되지 않았습니다. arxiblog.toml의 [llm] api_key를 채워주세요."));
+      process.exit(1);
+    }
+
+    const categories = opts.categories.split(",").map((c) => c.trim()).filter(Boolean);
+    if (!categories.length) {
+      console.log(C.red("카테고리를 하나 이상 지정해주세요 (예: cs.LG,cs.CL)."));
+      process.exit(1);
+    }
+    const count = parseInt(opts.count, 10);
+    if (!Number.isInteger(count) || count < 1) {
+      console.log(C.red(`잘못된 개수: ${opts.count}`));
+      process.exit(1);
+    }
+
+    const { runDigest } = await import("./pipeline/digest");
+    const store = new Store(join(root, DB_FILE));
+    try {
+      console.log(C.blue(`📚 최신 논문 다이제스트: ${categories.join(", ")} · 최대 ${count}편`));
+      const results = await runDigest(store, config, {
+        categories,
+        count,
+        level: opts.level,
+        persona: opts.persona,
+        onProgress: (msg) => console.log(C.dim(`   ${msg}`)),
+      });
+
+      const added = results.filter((r) => !r.skipped && !r.error);
+      const skipped = results.filter((r) => r.skipped);
+      const errored = results.filter((r) => r.error);
+
+      for (const r of added) console.log(C.green(`✅ "${r.title}"`) + `  ${C.dim(`arXiv:${r.arxivId}`)}`);
+      for (const r of errored) console.log(C.yellow(`⚠ arXiv:${r.arxivId} 실패: ${r.error}`));
+
+      console.log(
+        C.dim(`\n추가 ${added.length} · 건너뜀 ${skipped.length} · 실패 ${errored.length}`)
       );
 
       if (opts.build !== false) {
@@ -223,14 +279,25 @@ program
   .description("글을 삭제합니다")
   .action(async (slug: string) => {
     const root = findProjectRoot();
+    const config = loadConfig(root);
     const store = new Store(join(root, DB_FILE));
     try {
       if (!store.getPost(slug)) {
         console.log(C.yellow(`'${slug}' 글을 찾을 수 없습니다.`));
         return;
       }
+      // Publish a post-less build before deleting its database row. This keeps
+      // SQLite and the static site consistent if rendering fails, and prevents
+      // a removed page from remaining publicly served until a later build.
+      const { buildSite } = await import("./build/renderer");
+      const remaining = store.listPosts().filter((post) => post.slug !== slug);
+      const buildView = {
+        listPosts: () => remaining,
+        getAnnotations: (postId: number) => store.getAnnotations(postId),
+      };
+      await buildSite(buildView, config, root);
       store.deletePost(slug);
-      console.log(C.green(`삭제했습니다: ${slug}`));
+      console.log(C.green(`삭제하고 사이트를 다시 빌드했습니다: ${slug}`));
     } finally {
       store.close();
     }
@@ -250,7 +317,7 @@ program
       console.log(`  글 개수:    ${store.countPosts()}`);
       console.log(`  LLM:        ${config.llm.provider}/${config.llm.model}`);
       console.log(`  페르소나:   ${config.active_persona}`);
-      console.log(`  API 키:     ${config.llm.api_key ? "설정됨" : C.yellow("미설정")}`);
+      console.log(`  API 키:     ${hasLlmKey(config.llm) ? "설정됨" : C.yellow("미설정")}`);
       console.log(C.dim(`\n  누적 호출 ${usage.totalCalls}회 · ${usage.totalTokens.toLocaleString()} 토큰 · ~$${usage.totalCost.toFixed(4)}`));
     } finally {
       store.close();

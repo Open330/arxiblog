@@ -1,5 +1,6 @@
 import type { LLMClient } from "../llm-client";
 import type { Store, Post } from "../store";
+import { representativeText } from "../utils";
 
 const MAX_CONTEXT_CHARS = 14_000;
 
@@ -24,7 +25,7 @@ export async function answerQuestion(
 
   const glossary = annotations.map((a) => `- ${a.term}: ${a.explanation}`).join("\n");
   const paperContext = paper
-    ? `제목: ${paper.title}\n초록: ${paper.abstract}\n\n[본문 발췌]\n${(paper.raw_text || "").slice(0, MAX_CONTEXT_CHARS)}`
+    ? `제목: ${paper.title}\n초록: ${paper.abstract}\n\n[본문 발췌]\n${representativeText(paper.raw_text || "", MAX_CONTEXT_CHARS)}`
     : "(원문 정보 없음)";
 
   const system = `당신은 arXiv 논문을 일반 독자에게 친절하게 설명해 주는 조수입니다.

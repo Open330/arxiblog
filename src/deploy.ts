@@ -1,11 +1,12 @@
-import { join } from "path";
 import { existsSync } from "fs";
-import type { ArxiblogConfig } from "./config";
+import { resolveBuildOutputDir, type ArxiblogConfig } from "./config";
 
 type PublishFn = (dir: string, opts: Record<string, unknown>, cb: (err?: Error) => void) => void;
 
 export async function deploy(config: ArxiblogConfig, projectRoot: string): Promise<void> {
-  const outputDir = join(projectRoot, config.build.output_dir);
+  // Use the same confinement as build/serve: a typo such as `../` must never
+  // publish unrelated files outside the arxiblog project.
+  const outputDir = resolveBuildOutputDir(projectRoot, config.build.output_dir);
   if (!existsSync(outputDir)) {
     throw new Error("빌드 결과가 없습니다. 먼저 'arxiblog build'를 실행하세요.");
   }

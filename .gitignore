@@ -5,3 +5,8 @@ _site/
 *.db-shm
 arxiblog.toml
 .DS_Store
+.context/reviews/
+*.lock/
+*.deploy.lock/
+*.dead.*/
+.rpf.*.tmp

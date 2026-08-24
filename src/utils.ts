@@ -91,3 +91,29 @@ export function estimateReadingMinutes(text: string): number {
   const words = (latin.match(/[A-Za-z0-9]+/g) || []).length;
   return Math.max(1, Math.round(cjk / 500 + words / 220));
 }
+
+/**
+ * Keep evidence from the beginning, middle, and conclusion of a long paper.
+ * A simple leading slice systematically drops results and limitations.
+ */
+export function representativeText(text: string, maxChars: number): string {
+  const limit = Math.max(0, Math.floor(maxChars));
+  if (text.length <= limit) return text;
+  if (limit === 0) return "";
+
+  const marker = "\n\n[… 본문 일부 생략 …]\n\n";
+  const available = limit - marker.length * 2;
+  if (available < 30) return text.slice(0, limit);
+
+  const headLength = Math.floor(available * 0.5);
+  const middleLength = Math.floor(available * 0.2);
+  const tailLength = available - headLength - middleLength;
+  const middleStart = Math.floor((text.length - middleLength) / 2);
+  return [
+    text.slice(0, headLength),
+    marker,
+    text.slice(middleStart, middleStart + middleLength),
+    marker,
+    text.slice(text.length - tailLength),
+  ].join("");
+}

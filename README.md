@@ -55,8 +55,9 @@ arXiv 논문 하나를 넣으면 — LLM이 학계 사람이 아니어도 술술
 # 0) Bun 필요 (https://bun.sh)
 mkdir my-blog && cd my-blog
 
-# 1) 프로젝트 생성 (LLM 프로바이더/키 입력)
-bunx @open330/arxiblog init
+# 1) CLI 설치 후 프로젝트 생성 (LLM 프로바이더/키 입력)
+bun add --global @open330/arxiblog
+arxiblog init
 
 # 2) 논문 추가 — ID, abs URL, pdf URL 모두 OK
 arxiblog add 1706.03762
@@ -65,7 +66,7 @@ arxiblog add arXiv:2010.11929v1
 
 # 3) 로컬에서 보기 (AI 챗 + 관리 페이지 포함)
 arxiblog serve            # → http://localhost:8000
-# 콘솔에 /admin?token=... 관리 페이지 주소가 출력됩니다
+# 콘솔에 /admin#token=... 관리 페이지 주소가 출력됩니다
 
 # (선택) 같은 네트워크의 다른 기기에서도 열기
 arxiblog serve --host 0.0.0.0 -p 8088   # → http://<이-기기-IP>:8088
@@ -86,7 +87,7 @@ arxiblog serve --host 0.0.0.0 -p 8088   # → http://<이-기기-IP>:8088
 
 ## 웹 관리 페이지 (`/admin`)
 
-`arxiblog serve` 실행 시 콘솔에 `http://localhost:8000/admin?token=…` 주소가 출력됩니다. 이 페이지에서:
+`arxiblog serve` 실행 시 콘솔에 `http://localhost:8000/admin#token=…` 주소가 출력됩니다. fragment의 토큰은 프록시로 전송되지 않고 브라우저 세션에만 보관됩니다. 이 페이지에서:
 
 - 📥 **논문 추가** — arXiv ID/URL 입력 → 페르소나·난이도 골라 바로 글 생성
 - ⚙️ **설정** — LLM 프로바이더·모델·API Key, 기본 페르소나·난이도 변경
@@ -122,12 +123,30 @@ arxiblog add 2305.12345 --no-build              # 변환만 하고 빌드는 건
 - 챗은 `arxiblog serve` (로컬 서버) 모드에서 동작합니다.
 - GitHub Pages 같은 정적 호스팅에 배포하면 글·주석·용어집은 그대로 보이고, 챗 버튼은 "serve 모드에서 동작" 안내를 표시합니다.
 
+## macOS에서 상시 운영
+
+공개 터널이나 리버스 프록시의 원본 서버로 운영할 때는 터미널의 백그라운드 작업 대신 LaunchAgent를 사용하면 로그인 후 자동 시작되고 비정상 종료 시 재시작됩니다. 먼저 사이트를 빌드한 다음 설치하세요.
+
+```bash
+# 이 저장소에서 실행
+cd /path/to/blog-project
+/path/to/arxiblog/scripts/macos-launch-agent.sh install \
+  --project "$PWD" --source /path/to/arxiblog \
+  --label com.example.arxiblog --host 127.0.0.1 --port 8088
+
+# 상태와 최소 헬스 응답 확인
+/path/to/arxiblog/scripts/macos-launch-agent.sh status \
+  --project "$PWD" --label com.example.arxiblog --port 8088
+```
+
+서비스는 재시작 중 불완전한 결과물을 게시하지 않도록 `--no-build`로 실행됩니다. 콘텐츠 변경 후에는 `arxiblog build`를 성공시킨 뒤 `restart` 하세요. 프로젝트 설정과 `~/Library/Logs/arxiblog/<label>/`의 서버 로그는 권한 `0600`으로 보호하며, API 키를 plist나 프로세스 인자에 복사하지 않습니다. LaunchAgent에서 발급된 최신 관리자 URL은 비공개 `server.log`의 마지막 시작 메시지에서 확인합니다. 프록시의 upstream은 `http://127.0.0.1:8088`, 헬스체크는 `GET /healthz`로 설정할 수 있습니다.
+
 ## 아키텍처
 
 ```
 arXiv ID / URL
     ↓
-[ Ingest ]   ── export.arxiv.org API (메타, 429 백오프) + arxiv.org PDF (본문, pdf-parse)
+[ Ingest ]   ── export.arxiv.org API (메타, 429 백오프) + arxiv.org PDF (격리 worker, 제한 시간)
     ↓
 [ Transform ]── LLM: "논문 읽기 블로그" 글 + [[용어]] 주석 + mermaid 도식 (구조화 JSON)
     ↓

@@ -1,0 +1,667 @@
+# RPF Pointer
+
+> Living source of truth for iterative review, planning, work, and feedback.
+> RPF re-reads this document throughout every cycle. Multiple agents may edit
+> it concurrently: take the write lock, re-read, merge, then write.
+
+## Goal
+
+- Improve the current arxiblog service implementation by finding and fixing verified, actionable defects while preserving the existing R01/R02 work and documented product behavior.
+
+## Policies and constraints
+
+- Follow repository instructions and preserve user-authored intent and current workspace changes.
+- Prefer the smallest fix supported by concrete repository evidence; do not add unrelated features or abstractions.
+- Do not weaken completion criteria to claim convergence.
+- Do not deploy in this invocation, per the user's explicit instruction.
+- Content marked `RPF-LOCKED` requires explicit user authorization to change.
+
+## Completion criteria
+
+- [ ] Current implementation matches the documented CLI, build, serve, admin, chat, ingest, storage, and static-site behavior for all reviewed paths.
+- [ ] Every accepted defect has a regression test or equivalent executable verification evidence.
+- [ ] No actionable feedback or unresolved goal gaps remain.
+- [ ] No pending, active, integrated, or blocked work remains.
+- [x] `bun run check` passes against the committed integration snapshot.
+- [x] Deployment was not attempted.
+
+<!-- rpf:managed:start -->
+## RPF state
+
+- Status: blocked
+- Pointer revision: 25
+- Last writer: rpf-codex-20260812T082501Z-5b30
+- Total cycles: 1
+- Cycles allocated: 2
+- Last completed cycle: 1
+- Review input revision: 6
+- User instruction epoch: 1
+- State manifest revision: 0
+- Execution mode: full
+- Host capability status: failed
+- Pointer namespace ID: cd9717ddc4493ba7cc9c
+- Last material source-change cycle: 1
+- Last clean independent-review cycle: 0
+- Last regression-falsification cycle: 0
+- Last clean source fence: -
+- Last regression source fence: -
+- Current source fence: FENCE-002-5b30
+- Independent review: incomplete
+- Result falsification: incomplete
+- Regression falsification: not-due
+- Source contract status: incomplete
+- Coverage gaps: 8
+- Gates green: no
+- Prohibited checks: none
+- Unavailable checks: none
+- UI runtime status: not-applicable
+- Restricted results: 0
+- Quarantined items: 0
+- Secret exposure: none
+- Work ID high-watermark: 26
+- Gap ID high-watermark: 8
+- Next action: Repair and verify the authoritative RPF runtime sealed child-result and execution-authority compatibility, then resume cycle 2 from Phase 1 kill-gate terminalization; no source work was accepted.
+
+This document is the self-sufficient hot control-plane index and the only
+manifest/commit point. Authored intent, live coordination, every nonterminal
+scheduling or convergence input, and compact anti-duplication and completion-
+evidence indexes remain inline. Detailed or cold managed records may stay
+inline indefinitely or move to immutable shards; sharding is never required by
+a byte limit.
+
+Evidence materiality is derived from authoritative before/after row content,
+never a caller checkbox or substantive Boolean. Fresh mandatory current-cycle
+role, result, coverage, and verification rows are `nonmaterial` only when the
+logical identity and clean outcome match, both rows use the identical clean
+source fence, finding/gap/task/decision/residual-risk categories remain empty,
+and claim/source/evidence content is byte/semantically identical. Every
+malformed or changed category is `material`; a new finding or changed claim
+prevents a zero material-change count in that cycle.
+
+## State shard manifest
+
+`STATE_DIR` is derived from this pointer's resolved path. Paths below are
+POSIX-style paths relative to that directory. A shard is committed state only
+when this manifest references its exact digest. `Covers` is a comma-separated,
+bytewise-sorted list of exact root keys: an ordinary table row's `ID` or a
+durable index `Record ID`. It is a validation field, not a discovery query.
+`Purpose` is human-readable and never drives loading.
+Every `Detail shard` or `Shard ID` cell contains exactly one manifest
+`Shard ID`, or `-`; it never contains a path.
+Construct each `Shard ID` as `shard-` plus the full lowercase SHA-256 of the
+canonical `(Kind, Rev, SHA-256, Path, Covers)` tuple under the concurrency
+reference. One ID has one tuple for this pointer's lifetime. Collapse only
+byte-identical duplicate rows; reject remaining duplicate IDs and any path
+mapped to conflicting digests.
+
+| Shard ID | Kind | Rev | SHA-256 | Path | Covers | Purpose |
+|---|---|---:|---|---|---|---|
+
+## Active runs
+
+Rows are garbage-collected once `Lease expires` has passed. A run removes its
+own row before exiting. `Cycle` is the run's current `TOTAL_CYCLE`; review
+artifact retention must not delete a cycle a live row still holds.
+
+| Run ID | Tool | Cycle | Phase | Lease expires (UTC) | Target ref | Integration path | Claimed work | Claimed paths |
+|---|---|---|---|---|---|---|---|---|
+
+## Host capability evidence
+
+Full mode requires one current-run `passed` row before run registration or
+cycle allocation. The row is safe metadata from
+`scripts/rpf_runtime.py:capability_handshake`, not a caller assertion. Protected
+classification, strict child protocol, finite dispatch limits, child
+cancellation, and at least the portable cooperative publication strategy must
+be available. Atomic exchange raises assurance but is not required. Audit mode
+is not persisted and therefore never manufactures this row.
+
+| ID | Status | Rev | Run | Mode | Publication strategy | Assurance | Conflict recovery | Protected classifier | Strict protocol | Cancellation | Wall seconds | Context bytes | Output bytes / tokens | Evidence refs |
+|---|---|---:|---|---|---|---|---|---|---|---|---:|---:|---|---|
+| CAP-rpf-codex-20260812T082501Z-5b30 | passed | 14 | rpf-codex-20260812T082501Z-5b30 | full | atomic-exchange | strongest | true | true | true | true | 900 | 1048576 | 262144 | scripts/rpf_runtime.py:capability_handshake |
+
+## Reconciliation queue
+
+Record a preserved publication or semantic conflict here after the next safe
+write. `Authority` is `auto`, `agent`, or `user`; it guides resolution without
+forcing byte-identical wording. An open row blocks only the affected scope and
+convergence. Recovery refs identify the manifest and preserved variants.
+
+| ID | Status | Rev | Scope | Base SHA-256 | Current SHA-256 | Candidate SHA-256 | Authority | Resolution / reason | Recovery refs |
+|---|---|---:|---|---|---|---|---|---|---|
+
+## Dispatch ledger
+
+Register before launch. `State` is `active`, `completed`, `timed-out`,
+`cancelled`, `incomplete`, or `restricted`. The latter four are terminal
+tombstones; every later chunk/result with that Dispatch ID is rejected.
+Deadline and all size bounds are finite positive values. Cancellation closes
+streams and propagates to descendants before a barrier treats the row terminal.
+
+| Dispatch ID | Rev | Cycle | Run | Role instance | State | Deadline (UTC) | Context bytes | Output bytes / tokens | Descendants cancelled | Stream closed | Evidence refs |
+|---|---:|---:|---|---|---|---|---:|---|---|---|---|
+| D-R2-VERIFY-SCAN-R1-5b30 | 25 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-008 | incomplete | 2026-08-12T09:22:00Z | 1048576 | 262144 | true | true | official decode_child_result failed after the runtime update because ValidatedChildResult requires a private seal; raw transport rejected and not published |
+| D-R2-VERIFY-MIG-R1-5b30 | 25 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-010 | incomplete | 2026-08-12T09:22:00Z | 1048576 | 262144 | true | true | official decode_child_result failed after the runtime update because ValidatedChildResult requires a private seal; raw transport rejected and not published |
+| D-R2-VERIFY-PTR-R1-5b30 | 25 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-019 | incomplete | 2026-08-12T09:22:00Z | 1048576 | 262144 | true | true | official decode_child_result failed after the runtime update because ValidatedChildResult requires a private seal; raw transport rejected and not published |
+| D-R2-VERIFY-SCAN-5b30 | 24 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-008 | cancelled | 2026-08-12T09:18:00Z | 1048576 | 262144 | true | true | rejected: dispatch was launched before ledger registration; no result accepted |
+| D-R2-VERIFY-MIG-5b30 | 24 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-010 | cancelled | 2026-08-12T09:18:00Z | 1048576 | 262144 | true | true | rejected: dispatch was launched before ledger registration; no result accepted |
+| D-R2-VERIFY-PTR-5b30 | 24 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:agg-r2-019 | cancelled | 2026-08-12T09:18:00Z | 1048576 | 262144 | true | true | rejected: dispatch was launched before ledger registration; no result accepted |
+| D-R2-AGG-5b30 | 21 | 2 | rpf-codex-20260812T082501Z-5b30 | aggregate-result-falsifier | completed | 2026-08-12T09:18:00Z | 1048576 | 262144 | false | true | runtime-decoded aggregate failed closed due mandatory security role incomplete; seven roles reduced |
+| D-R2-WORK-004-5b30 | 21 | 2 | rpf-codex-20260812T082501Z-5b30 | work-agent:rpf-004 | cancelled | 2026-08-12T09:18:00Z | 1048576 | 262144 | true | true | launched before aggregate barrier; interrupted; no source diff; rejected |
+| D-R2-VERIFY-PUB-5b30 | 19 | 2 | rpf-codex-20260812T082501Z-5b30 | adversarial-verifier:rpf-004-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded verified RPF-004 kill gate |
+| D-R2-RETRY-SEC-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:security-reviewer-r2 | incomplete | 2026-08-12T09:06:35Z | 1048576 | 262144 | true | true | follow-up returned non-protocol payload; temp transport and derived artifact removed; no retry remains |
+| D-R2-RETRY-ARCH-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:architecture-reviewer-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-DB-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:database-reviewer-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-FE-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:frontend-reviewer-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-TEST-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:testing-reviewer-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-LLM-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:ai-llm-reviewer-r2 | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-ALIGN-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | pointer-alignment | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-RETRY-DOC-5b30 | 17 | 2 | rpf-codex-20260812T082501Z-5b30 | plan-doc-consistency | completed | 2026-08-12T09:06:35Z | 1048576 | 262144 | false | true | runtime-decoded closed-schema result published |
+| D-R2-REV-SEC-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:security-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-ARCH-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:architecture-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-DB-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:database-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-FE-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:frontend-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-TEST-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:testing-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-LLM-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | conclusion-blind-persona:ai-llm-reviewer-r2 | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-ALIGN-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | pointer-alignment | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+| D-R2-REV-DOC-5b30 | 15 | 2 | rpf-codex-20260812T082501Z-5b30 | plan-doc-consistency | incomplete | 2026-08-12T08:50:27Z | 1048576 | 262144 | true | true | closed-schema validation failed; one fresh retry scheduled |
+
+## Source fence ledger
+
+Use a canonically validated exact `BASE_HEAD_SHA` / `SCOPE` / `SCOPE_HASH`
+triple and independently recompute it from the approved immutable source before
+testing aliases. `Base HEAD SHA` is lowercase 40-hex. `PRE-CONTRACT` is allowed
+only with `Eligibility = historical-non-convergence`, never for current or
+convergence evidence. `Scope` is nonempty, bytewise-sorted, unique exact regular
+repository-relative POSIX paths without traversal or globs; `Scope hash` is
+lowercase 64-hex from the canonical path/NUL/file-hash/LF algorithm. Labels,
+placeholders, empty scope, and wrong hashes are invalid. A `Fence ID` is then a
+lifetime-immutable one-to-one alias: exactly one ID names one canonical exact
+triple and that triple has no second ID. Divergent or duplicate aliases block
+publication. Every dependent row resolves its ID and compares all three fields.
+
+| Fence ID | Cycle | Run | Eligibility | Base HEAD SHA | Scope | Scope hash | Evidence |
+|---|---:|---|---|---|---|---|---|
+| FENCE-002-5b30 | 2 | rpf-codex-20260812T082501Z-5b30 | current | 0b0b9e0cbb7ffac486cf81fc42544ad416541959 | `[".gitignore","LICENSE","README.md","bin/arxiblog","bun.lock","package.json","personas/engineer.json","personas/friendly.json","personas/storyteller.json","scripts/cf-tunnel-up.sh","scripts/macos-launch-agent.sh","src/build/chat-history.test.ts","src/build/mermaid-a11y.test.ts","src/build/popover-layout.test.ts","src/build/renderer.ts","src/build/static/app.js","src/build/static/fonts.css","src/build/static/rich.js","src/build/static/style.css","src/build/templates.ts","src/config-personas.test.ts","src/config.ts","src/deploy.test.ts","src/deploy.ts","src/index.ts","src/ingest/arxiv.ts","src/ingest/pdf-resource-limits.test.ts","src/ingest/pdf-worker.test.ts","src/ingest/pdf-worker.ts","src/llm-client.ts","src/pipeline/add-options.test.ts","src/pipeline/add.ts","src/pipeline/chat.test.ts","src/pipeline/chat.ts","src/pipeline/transform.test.ts","src/pipeline/transform.ts","src/server-auth.test.ts","src/server-quota.test.ts","src/server.ts","src/store-aggregate.test.ts","src/store.ts","src/types.d.ts","src/utils.ts","tsconfig.json"]` | b4213b0858499e176c19794f8a82f9985878baaaa200f558edcf5fa5a92989f1 | Protected classifier approved 44 exact tracked text paths; five screenshot binaries excluded metadata-only; five test paths are uninspectable restricted metadata. |
+
+## Selected persona authority
+
+Persist every selected conclusion-blind persona as a separate required role
+instance. `Instance ID` is stable for the selection and forms the roster role
+`conclusion-blind-persona:<Instance ID>`. Select 1–6 applicable instances;
+omission, duplicate identity, or an extra caller-injected persona makes the
+captured authority incomplete.
+
+| Instance ID | Rev | Persona source | Applicable | Reason | Evidence refs |
+|---|---:|---|---|---|---|
+| security-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/security-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+| architecture-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/architecture-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+| database-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/database-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+| frontend-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/frontend-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+| testing-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/testing-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+| ai-llm-reviewer-r2 | 15 | /Users/jiun/workspace/agent-skills/personas/ai-llm-reviewer.md | yes | Applicable to the seven remaining persistence, LLM, proxy, UI, and test obligations. | FENCE-002-5b30 |
+
+## Aggregate claim authority
+
+This is the complete post-review claim inventory supplied to aggregate
+falsification and coverage derivation. Each stable `claim:<id>` belongs to one
+required role instance and carries typed current-fence source refs. Reducers
+derive additions from this table; they never accept a parallel caller list.
+Zero findings still produce one explicit zero-finding aggregate claim.
+
+| Claim ID | Rev | Role instance | Claim | Source refs `{path,line,symbol}` | Disposition |
+|---|---:|---|---|---|---|
+| claim:r2-01 | 15 | conclusion-blind-persona:security-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | incomplete-protocol |
+| claim:r2-02 | 15 | conclusion-blind-persona:architecture-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-03 | 15 | conclusion-blind-persona:database-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-04 | 15 | conclusion-blind-persona:frontend-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-05 | 15 | conclusion-blind-persona:testing-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-06 | 15 | conclusion-blind-persona:ai-llm-reviewer-r2 | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-07 | 15 | pointer-alignment | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-08 | 15 | plan-doc-consistency | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | validated-review |
+| claim:r2-09 | 15 | aggregate-result-falsifier | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | pending-review |
+| claim:r2-10 | 15 | ui-runtime-verifier | Search the exact fenced source for concrete counterexamples to the remaining service completion criteria and recorded work obligations. | `{"path":"package.json","line":1,"symbol":"{"}` | pending-review |
+
+## Game topology authority
+
+The controller derives applicability from approved metadata before review.
+Every one of the 12 named families has exactly one row. A detected root forbids
+`not-applicable`. Applicable rows carry exact roots, visited node/typed-edge
+counts, finite budget, and an empty unresolved frontier before coverage can be
+closed. A nonempty/overflow frontier creates an open coverage gap.
+
+| Family | Rev | Applicable | Detection reason | Exact roots | Nodes | Typed edges | Budget | Unresolved frontier | Source refs `{path,line,symbol}` | Gap ID |
+|---|---:|---|---|---|---:|---:|---:|---|---|---|
+| lifecycle | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| scenes | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| assets | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| input | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| state | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| physics/AI | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| combat | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| economy/progression | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| save/load | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| network | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| UI | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+| platform variants | 15 | false | This is a static blog/CLI/server repository, not a game or game-adjacent project. | [] | 0 | 0 | 0 | [] | `{"path":"package.json","line":1,"symbol":"{"}` | - |
+
+## Review coverage
+
+Inventory, game-topology, and incident-probe obligations are atomic. Before
+dispatch, the controller allocates a dispatch-unique numeric `COV-<digits>` ID
+for each obligation; the generator never derives categorical IDs from kind or
+identity. Keep the ID separate from immutable `Obligation` identity and reject
+reuse across dispatches. Build the nonempty authoritative expected mapping from
+the exact metadata source inventory plus the full named 12-game-family and
+five-incident-family catalogs (`durable-state-recovery`, `identity-
+authorization-defaults`, `session-teardown-concurrency`, `backup-restore-
+roundtrip`, and `mobile-sharing-accessibility`) and role claim/watch additions. A caller-selected
+empty, composite, sampled, or omitted set is invalid. `Kind` is `inventory`, `game`, or
+`probe`; `Disposition` is exactly `applicable`, `covered`, `excluded`,
+`uninspectable`, or `not-applicable`. `applicable` is unfinished. Every other
+disposition requires evidence references; `excluded` and `uninspectable` also
+require a reason and linked open gap. Missing or non-identical duplicate IDs,
+or an omitted required obligation, create a coverage gap and fail closed.
+For `backup-restore-roundtrip`, an `applicable` or `covered` row also carries
+structured current-fence export producer, import consumer, schema, version,
+content, ordering, and three trust links: distinct export/import record IDs and
+a comparison ID in the controller-captured immutable registries below. Every
+ID resolves at the current cycle/run/fence; both records match every declared
+field, and only the captured comparison result establishes equality. Arbitrary,
+missing, stale, or row-authored IDs/equality fail closed. Final-save/error truthfulness belongs to `session-
+teardown-concurrency`, not a sixth base family.
+
+| Coverage ID | Cycle | Run | Dispatch ID | Role | Source fence | Kind | Obligation | Disposition | Evidence refs | Structured evidence | Reason / blocker | Gap ID |
+|---|---:|---|---|---|---|---|---|---|---|---|---|---|
+
+| Backup record ID | Cycle | Run | Source fence | Kind | Producer / consumer | Schema | Version | Content | Ordering | Evidence refs |
+|---|---:|---|---|---|---|---|---|---|---|---|
+
+| Backup comparison ID | Cycle | Run | Source fence | Export record ID | Import record ID | Result | Evidence refs |
+|---|---:|---|---|---|---|---|---|
+
+## Required role evidence
+
+Close the roster before dispatch, and consume it only in that same completed
+`TOTAL_CYCLE` and `Run`. Every required row has a unique independently generated
+opaque `Dispatch ID`, exact current source fence, and links to its current
+coverage and result rows. `Role ID` is lifetime-unique. A dispatch ID shared by
+two role instances or reused across any historical roster, review-result, coverage,
+aggregate/regression/source/UI/gate result row is stale. `Role` is
+`conclusion-blind-persona:<Instance ID>`, `pointer-alignment`, `plan-doc-consistency`,
+`aggregate-result-falsifier`, `source-contract-verifier`,
+`regression-falsifier`, `ui-runtime-verifier`, or an explicitly named repository role. `Required` is
+`yes` or `no`; `Status` is `passed`, `findings`, `failed`, `incomplete`,
+`restricted`, or `not-applicable`.
+
+At reduction time consume one controller-captured immutable current-state
+projection reconstructed from this root and sealed to pointer revision/hash
+and the exact current cycle/run/fence. It includes repository roles, selected
+persona instances, complete aggregate claims, topology/applicability, every
+watch and contract/gate, authoritative UI inventory or no-UI detection,
+runtime records, backup export/import/comparison registries, and open gaps.
+Derive `Required=yes`, every open watch, every role's claim/watch additions,
+and every affected contract internally from that one projection. Caller-
+selected due Booleans, subsets, and empty replacements are invalid; a missing,
+stale, malformed, or non-reconstructible capture fails closed. Core role
+instances are every selected conclusion-blind persona plus pointer alignment,
+plan/doc consistency, and aggregate-result falsifier; add regression,
+source-contract, UI-runtime, and repository roles
+only when due by recorded inventory/watch rules. A caller does not select this
+set, and any derived role omitted from the roster makes the cycle incomplete.
+
+| Cycle | Run | Role ID | Dispatch ID | Role instance | Required | Source fence | Status | Coverage IDs | Result ID | Evidence |
+|---:|---|---|---|---|---|---|---|---|---|---|
+
+## Review result evidence
+
+Store exactly one atomic summary row for every required-role roster row. Each
+required role links exactly one `Result ID`, and one Result ID links exactly one
+Role ID. `Closed status` uses the role closed enum and must equal the roster
+status. `Counterexample search` and `Source-grounded evidence` are nonempty;
+`Coverage IDs` is the complete current terminal coverage set. Link specialized
+aggregate/source/regression rows only through duplicate-free `Specialized
+detail IDs`; those detail rows remain in their separate tables and never
+replace this summary. Every row matches the consuming current cycle, run,
+dispatch, exact fence, and required status.
+
+| Result ID | Cycle | Run | Role ID | Dispatch ID | Source fence | Required status | Closed status | Counterexample search | Source-grounded evidence | Coverage IDs | Specialized detail IDs |
+|---|---:|---|---|---|---|---|---|---|---|---|---|
+
+## Result falsifier evidence
+
+One current-cycle/current-run row from the roster's dispatch closes the
+aggregate claim, including a zero-finding claim. `Status` is `passed`, `failed`,
+`incomplete`, or `restricted`.
+
+| Cycle | Run | Verdict ID | Dispatch ID | Source fence | Claim under test | Status | Counterexample search | Source-grounded evidence | Coverage IDs |
+|---:|---|---|---|---|---|---|---|---|---|
+
+## Regression watch
+
+Rows remain `open` in the source-change cycle. Only a strictly later fresh
+review and falsifier against the identical source fence may clear one. Keep
+each row atomic: `Obligation kind` is `contract`, `invariant`, `failure-mode`,
+or `probe`. When a later material change creates a new current fence, publish a
+higher-Rev carry-forward row for every open watch before authority capture.
+Preserve its stable ID, original `Changed cycle`, obligation, consumers, probe,
+and evidence; replace only the bound fence and append carry evidence. Any open
+older-fence row makes capture and convergence incomplete.
+
+| ID | Status | Rev | Changed cycle | Cleared cycle | Source fence | Obligation kind | Obligation | Consumers / surfaces | Counterexample or probe | Evidence | Detail shard |
+|---|---|---:|---:|---:|---|---|---|---|---|---|---|
+
+## Regression falsifier evidence
+
+When regression is due, one fresh falsifier receives every open watch for the
+recomputed current exact fence and returns exactly one verdict row per watch in
+the consuming current completed cycle/run. `Status` is `passed`, `failed`,
+`incomplete`, or `restricted`.
+
+| Cycle | Run | Verdict ID | Dispatch ID | Watch ID | Source fence | Status | Counterexample search | Source-grounded evidence | Coverage IDs |
+|---:|---|---|---|---|---|---|---|---|---|---|
+
+## Test prohibitions
+
+Record exact authoritative prohibitions. A prohibited command is
+`not-run-prohibited`, never green. Secret-preflight free-form action bytes
+before this table; when unsafe, store only the structurally exact redacted
+action, opaque metadata, and linked coverage gap, never a value or its hash.
+
+| ID | Status | Rev | Source / authority | Scope | Exact command or action | Disposition |
+|---|---|---:|---|---|---|---|
+
+## Gate results
+
+Rows are fenced execution facts. When no configured gate exists, add one
+explicit `not-applicable` detection row; an empty table means incomplete
+detection. `Gates green`, `Prohibited checks`, and `Unavailable checks` are
+derived from the current-fence rows. `Exact command or action` contains only
+preflight-cleared bytes or a non-executable structural redaction. `Gate
+snapshot` is immutable: the exact committed `GATE_HEAD_SHA`, or, only when a
+commit is explicitly prohibited, an authorized isolated exact source
+snapshot/fence with verified identical before/after byte hashes. A rebase,
+snapshot/fence mismatch, mutable working tree, or failed isolation check
+invalidates the row; never call a mutable working tree green.
+
+| ID | Status | Rev | Cycle | Run | Dispatch ID | Source fence | Gate snapshot | Source / authority | Exact command or action | Classification | Affected contract IDs | Evidence refs |
+|---|---|---:|---:|---|---|---|---|---|---|---|---|---|
+
+## Source contract authority
+
+This root table is the complete restart-safe contract inventory. `Changed` and
+`Still current` are typed Booleans. Gate `Affected contract IDs` resolve only
+against it. Missing/duplicate IDs, unknown gate links, or a matrix without an
+authority row makes capture incomplete.
+
+| Contract ID | Rev | Name | Changed | Still current | Producer surface | Consumer surfaces | Evidence refs |
+|---|---:|---|---|---|---|---|---|
+| CON-004 | 15 | stored-versus-published add retry | false | true | src/pipeline/add.ts:52 addPaper | src/index.ts:100-140; src/server.ts:477-507 | FENCE-002-5b30 |
+| CON-009 | 15 | remove-and-rebuild ordering | false | true | src/index.ts:222 remove; src/server.ts:568 handleDelete | src/build/renderer.ts; src/store.ts:324 deletePost | FENCE-002-5b30 |
+| CON-012 | 15 | Gemini key-pool lifecycle across requests | false | true | src/llm-client.ts:276 LLMClient | src/server.ts:423 handleChat | FENCE-002-5b30 |
+| CON-017 | 15 | trusted proxy quota identity | false | true | src/server.ts:172 clientIp | src/config.ts:69 trust_proxy; scripts/cf-tunnel-up.sh | FENCE-002-5b30 |
+| CON-018 | 15 | annotation Escape dismissal | false | true | src/build/static/app.js:142 setAnnotationOpen | src/build/templates.ts; src/build/static/style.css | FENCE-002-5b30 |
+| CON-021 | 15 | billable usage persistence after downstream failure | false | true | src/llm-client.ts:502 record usage | src/pipeline/add.ts:52 addPaper; src/store.ts:348 addUsageLog | FENCE-002-5b30 |
+| CON-025 | 15 | production SDK initialization | false | true | src/llm-client.ts:303 provider initialization | src/llm-client.ts provider branches | FENCE-002-5b30 |
+
+## Source contract verification
+
+Use one stable row per contract in the authoritative affected-contract mapping
+derived from the one validated captured-state projection.
+That mapping always includes every `changed=true` contract, whether gates are
+missing, present, or `not-applicable`, plus every still-current contract linked
+to a current prohibition or unavailable runtime check. Every nonempty mapping
+requires a fresh current-cycle verifier and complete matrices.
+`not-applicable` is allowed only when neither category exists.
+Every matrix field below is explicit and typed. Producer is one and Consumers
+is a nonempty unique list of `{path,line,symbol}` source references. Success,
+Error, Variants, and Counterexample are `{claim,refs}` objects; Invariants is a
+nonempty list of the same claim objects. Evidence refs is a nonempty source-ref
+list. Every reference resolves against the captured current-fence source index
+to an approved path, in-range line, and symbol present on that line. Scalars,
+arbitrary containers, placeholders, unknown/out-of-scope paths, missing
+symbols, and wrong lines are incomplete. `passed` requires Producer,
+Consumers, Inputs, Outputs, Invariants, Success, Error, Variants,
+Counterexample, Evidence refs, Residual risk, and Coverage IDs, all current-
+cycle/current-run and current-fence;
+`none` without supporting evidence is empty. A missing contract or
+non-identical duplicate ID fails closed as `incomplete`. `passed` is static
+evidence, not runtime equivalence.
+
+| ID | Status | Rev | Cycle | Run | Dispatch ID | Source fence | Contract | Producer | Consumers | Inputs | Outputs | Invariants | Success | Error | Variants | Counterexample | Evidence refs | Residual risk | Coverage IDs | Detail shard |
+|---|---|---:|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+## UI runtime verification
+
+Keep one stable atomic row per affected UI obligation from the authoritative
+`UI ID -> exact kind` mapping derived from the captured-state projection. If it
+is empty, require exactly one current-cycle/current-run/current-fence `no-ui-
+detection` row in the dedicated table below with inventory evidence; it has no
+coverage/runtime-record link. A row in the ordinary obligation table and a
+composite route/viewport/interaction/variant row are both invalid substitutes.
+Otherwise reject a
+caller-selected empty/omitted set and enumerate route, viewport, interaction,
+and variant obligations as due; `not-applicable` remains one atomic evidenced
+row per authoritative ID. Outside the explicit detection exception, `Surface kind` is exactly
+`route`, `viewport`, `interaction`, or `variant`; `Disposition` uses the review-
+coverage closed enum. `Evidence kind` is `runtime`, `static`, or `none`.
+Reduce `Status` through exactly `failed`, `unverified-prohibited`, `unverified-
+unavailable`, `verified`, or `not-applicable`; never reduce to a Boolean.
+`verified` requires every required current-fence UI obligation and its linked
+coverage row to be `covered`, plus a `Runtime record ID` resolving to the
+controller-captured immutable execution/observation table below. Row-authored
+runner/snapshot/command/action/expected/observed placeholders are never trusted.
+Static or missing
+evidence never verifies.
+Missing or non-identical duplicate IDs fail closed to `unverified-unavailable`
+and create a coverage gap. Preserve accepted unverified risk and its authority.
+
+| No-UI detection ID | Status | Rev | Cycle | Run | Dispatch ID | Source fence | Kind | Evidence refs |
+|---|---|---:|---:|---|---|---|---|---|
+
+| ID | Status | Rev | Cycle | Run | Dispatch ID | Source fence | Surface kind | Surface | Disposition | Evidence kind | Runtime record ID | Evidence refs | Blocker / risk authority | Coverage ID | Detail shard |
+|---|---|---:|---:|---|---|---|---|---|---|---|---|---|---|---|---|
+
+Controller-captured runtime records are immutable current-fence execution facts.
+The ID binds runner, snapshot, command, action, expected, observed, and terminal
+result. `passed` requires observed to equal expected. A UI row cannot author or
+override these fields.
+
+| Runtime record ID | Cycle | Run | Source fence | Runner | Snapshot ID | Command | Action | Expected | Observed | Result | Evidence refs |
+|---|---:|---|---|---|---|---|---|---|---|---|---|
+
+## Restricted results
+
+Store safe metadata only. Never store or replay safety-filtered content.
+`Linked work/gap` is a comma-separated list of exact `RPF-<digits>` or
+`GAP-<digits>` IDs. Every `restricted` row requires at least one link; `-`, an
+empty cell, and free-form text are invalid. Preserve the exact links on resumed
+or resolved history rows.
+
+| ID | Status | Rev | Cycle | Run | Dispatch ID | Source fence | Role | Claimed severity | Safe source metadata | Missing proof | Resume when | Linked work/gap |
+|---|---|---:|---:|---|---|---|---|---|---|---|---|---|
+
+## Secret exposure incidents
+
+Never record the value, a reversible derivative, or blocked output.
+
+| ID | Status | Rev | Cycle | Run | Source fence | Source class | Affected channel | Safe response / user notice | Reopen when |
+|---|---|---:|---:|---|---|---|---|---|---|
+
+## Residual risks
+
+| ID | Status | Rev | Area | Source fence | Unverified behavior | Impact | Reopen when | Authority |
+|---|---|---:|---|---|---|---|---|---|
+
+## Current understanding
+
+- `package.json` defines `bun run check` as the aggregate typecheck and test quality gate.
+- The primary checkout contains a large, uncommitted R01/R02 improvement set documented under `.context/impl/`; it must be preserved and reviewed as the current implementation snapshot.
+- Deployment targets exist through the publishable npm package and the documented `arxiblog deploy` workflow, but deployment mode is `none` by explicit user instruction.
+- The primary checkout is dirty, so integration and repository-wide gates use a dedicated worktree snapshot.
+- The validated 29-file workspace snapshot is committed locally at `7d11eb98c1b1a804bf496a228fa5a2e13dbe4c92` on `rpf/af67-cycle1`; its manifest digest is `2fa62747fa0a428ccf582a6758b31c098c61aa61634126eb1c2a162111cd92e6`.
+- Eight independent reviews and nineteen adversarial verifier units accepted 30 findings that deduplicate to 26 actionable root causes; no finding was refuted and no reviewer failed.
+- The snapshot gate is green (70 tests, 352 assertions), but the accepted findings show that current tests miss material auth, persistence, LLM, PDF-worker, and browser failure paths.
+- Nineteen scoped fixes passed independent acceptance and the committed integration gate at `0b0b9e0cbb7ffac486cf81fc42544ad416541959`; RPF-004 semantics are resolved by the cycle-2 user choice: durable stored/published state and publication retry must reuse the completed transform without another paid LLM call.
+
+## Goal gaps
+
+| ID | Status | Rev | Gap | Evidence | Detail shard |
+|---|---|---:|---|---|---|
+| GAP-001 | open | 14 | Seven verified actionable root causes remain ready for review or implementation. | User selected durable stored/published semantics for RPF-004; RPF-004,009,012,017,018,021,025 remain nonterminal. | - |
+| GAP-002 | open | 15 | Protected classification excluded `src/arxiblog.test.ts` from agent source review. | restricted metadata only; opaque incident INC-1fba13b063647c842fcce82b; raw bytes were not read or prompted. | - |
+| GAP-003 | open | 15 | Protected classification excluded `src/build/assets.test.ts` from agent source review. | restricted metadata only; opaque incident INC-2fd3baddc921006d78a9cf13; raw bytes were not read or prompted. | - |
+| GAP-004 | open | 15 | Protected classification excluded `src/config-permissions.test.ts` from agent source review. | restricted metadata only; opaque incident INC-a86c0db708bd45e889b83829; raw bytes were not read or prompted. | - |
+| GAP-005 | open | 15 | Protected classification excluded `src/llm-cancellation.test.ts` from agent source review. | restricted metadata only; opaque incident INC-3625a3d60319a4a33028dfb8; raw bytes were not read or prompted. | - |
+| GAP-006 | open | 15 | Protected classification excluded `src/llm-client.test.ts` from agent source review. | restricted metadata only; opaque incident INC-3dd46b4240999fa53e0943e7; raw bytes were not read or prompted. | - |
+| GAP-007 | open | 22 | Mandatory security retry ended with a non-protocol follow-up payload after its one allowed fresh retry. | Dispatch D-R2-RETRY-SEC-5b30 is terminal incomplete; its child-owned temp copy and controller-derived artifact were removed and no further retry is allowed. | - |
+| GAP-008 | open | 25 | The updated authoritative RPF runtime cannot validate child results consistently and its execution-authority migration is incompatible with current tests and callers. | Official runtime tests ran 41 cases with 1 failure and 4 errors; decode_child_result constructs a sealed ValidatedChildResult without the required seal, so three returned kill-gate transports were rejected. | - |
+
+## Work queue
+
+| ID | Status | Sev | Prio | Deps | Owner | Claim expires (UTC) | Rev | Task | Acceptance criteria | Evidence | Detail shard |
+|---|---|---|---|---|---|---|---:|---|---|---|---|
+| RPF-001 | done | high | 0 | - | - | - | 13 | Remove administrator query-token authentication and bootstrap support. | State-changing/admin routes accept only a correct Bearer token; fragment bootstrap still works; missing, wrong, and query-only credentials are regression-tested. | `src/server.ts`, `src/build/templates.ts`, `src/server-auth.test.ts`; 15 targeted tests pass; diff scope accepted. | - |
+| RPF-002 | done | high | 0 | - | - | - | 13 | Repair permissions on existing credential-bearing config files during load. | Loading a legacy 0644 config restricts it to 0600 before secrets are returned; ordinary config loading and save behavior remain green. | `src/config.ts`, `src/config-permissions.test.ts`; legacy 0644→0600 and round-trip tests pass. | - |
+| RPF-003 | done | high | 0 | - | - | - | 13 | Commit the generated paper/post/annotation/usage aggregate in one database unit of work. | A forced annotation or usage write failure leaves the prior aggregate unchanged; success persists all records exactly once. | `src/store.ts`, `src/pipeline/add.ts`, `src/store-aggregate.test.ts`; rollback and exactly-once tests pass (3 targeted, 40 relevant). | - |
+| RPF-004 | pending | high | 0 | RPF-003 | - | - | 23 | Define and enforce stored-versus-published add semantics without duplicate paid retry work. | A build failure cannot masquerade as an all-or-nothing add or cause a normal retry to repeat the completed transform; DB/static outcome is explicit and tested. | User chose durable stored/published state with idempotent publication retry that reuses the completed stored transform; ready for review and implementation. | - |
+| RPF-005 | done | high | 0 | - | - | - | 13 | Propagate client disconnect cancellation through chat, provider attempts, and retry waits. | Aborting the request aborts active provider I/O and pending backoff, releases the quota reservation, and does not settle late success. | `src/server.ts`, `src/pipeline/chat.ts`, `src/llm-client.ts`, `src/llm-cancellation.test.ts`; real disconnect aborts provider, releases quota, ignores late success; 113-test gate passed. | - |
+| RPF-006 | done | high | 0 | - | - | - | 13 | Reject empty, blocked, refused, and truncated provider completions before success accounting. | All provider adapters classify unusable finish states consistently; unusable output never becomes HTTP/quota success; deterministic adapter tests cover the cases. | `src/llm-client.ts`, `src/llm-client.test.ts`; 24 provider tests pass and only complete attempts are tracked; retry paths pass independent 300-run stress verification. | - |
+| RPF-007 | done | high | 0 | - | - | - | 13 | Isolate untrusted paper/post text from transform and chat instructions. | Prompt construction explicitly marks external content as untrusted data, closes delimiters, and regression tests cover embedded instruction/link attempts without breaking valid transforms. | `src/pipeline/transform.ts`, `src/pipeline/chat.ts`, prompt tests; escaped closed untrusted JSON blocks verified, 5 targeted tests pass. | - |
+| RPF-008 | done | high | 0 | - | - | - | 13 | Replace the unavailable npm quick start with an install path that works without publishing. | README no longer asserts an unavailable package as the sole onboarding path and the documented source install/bootstrap command is executable locally. | `README.md`; source clone/install wrapper documented; `arxiblog --help` validated in a temporary directory without publish/deploy. | - |
+| RPF-009 | pending | high | 0 | - | - | - | 5 | Add regression coverage for destructive remove-and-rebuild ordering. | CLI and HTTP success/failure tests assert both SQLite and static-site state; delete-before-build and omitted-delete mutations would fail. | `src/index.ts:227-237`; `src/server.ts:541-557`; R1-testing-reviewer-1 | - |
+| RPF-010 | done | high | 0 | RPF-001 | - | - | 13 | Exercise admin Bearer authentication through the real HTTP route layer. | Missing/wrong/query-only tokens are rejected and a correct Bearer token succeeds for representative read/write routes. | `src/server.ts`, `src/server-auth.test.ts`; real loopback GET/POST route test passes for missing, wrong, query-only, and correct Bearer credentials (49 relevant tests). | - |
+| RPF-011 | done | high | 0 | - | - | - | 13 | Prove the real PDF worker extracts a valid minimal PDF. | A valid fixture yields known nonempty text through the real worker; worker/parser bootstrap failure cannot satisfy the positive assertion. | `src/ingest/pdf-worker.test.ts`; generated valid PDF extracted exact known text through real worker; 3 targeted tests pass. | - |
+| RPF-012 | pending | medium | 1 | - | - | - | 5 | Preserve Gemini key rotation and cooldown state across service requests. | Consecutive requests rotate keys and retain quota cooldown without leaking provider config across projects. | `src/llm-client.ts:217-267`; `src/server.ts:430-440`; R1-ai-llm-reviewer-3 | - |
+| RPF-013 | done | medium | 1 | - | - | - | 13 | Validate CLI level and persona values before ingestion or LLM work. | Unsupported values fail with an actionable error before fetch/LLM calls; documented supported values still work. | `src/index.ts`, `src/pipeline/add.ts`, `src/pipeline/add-options.test.ts`; validation precedes progress/network/key checks; 3 targeted and 100 full tests pass. | - |
+| RPF-014 | done | medium | 1 | - | - | - | 13 | Make the project-local custom-persona contract executable or correct it. | Project persona discovery/merge behavior matches README for new and existing projects and is regression-tested. | `src/config.ts`, `src/config-personas.test.ts`; deterministic project override/merge and malformed-file warnings tested; 5 targeted tests pass. | - |
+| RPF-015 | done | medium | 1 | - | - | - | 13 | Remove undeclared `npx` dependence from the Vercel command path. | The command uses declared Bun tooling or emits an early prerequisite error; a Bun-only PATH test covers command construction without deploying. | `src/deploy.ts`, `src/deploy.test.ts`; Bun-x command and missing-Bun behavior tested without deploy, with canonical path portability fix. | - |
+| RPF-016 | done | medium | 1 | - | - | - | 13 | Bound browser chat history to the server-supported recent-turn contract. | Long conversations continue sending successfully under 64 KiB; retries do not retain an irrecoverably oversized history. | `src/build/static/app.js`, `src/build/chat-history.test.ts`; six-turn/4,000-char/64 KiB UTF-8 bounds and retry state tested. | - |
+| RPF-017 | pending | medium | 1 | - | - | - | 5 | Align bundled Cloudflare loopback ingress with trusted proxy quota identity. | Distinct trusted Cloudflare client IPs receive distinct quotas while spoofed headers from untrusted peers are ignored; configuration is documented/tested. | `scripts/cf-tunnel-up.sh:45-52`; `src/config.ts:84-90`; `src/server.ts:172-183`; R1-architecture-reviewer-5 | - |
+| RPF-018 | pending | medium | 1 | - | - | - | 5 | Make annotation popovers dismissible with Escape across focus and hover states. | Escape hides an open/focused popover without requiring focus navigation; keyboard regression evidence covers the visibility state. | `src/build/static/app.js:123-137,210-220`; `src/build/static/style.css:190-192`; R1-frontend-reviewer-1 | - |
+| RPF-019 | done | medium | 1 | - | - | - | 13 | Keep annotation popovers inside the viewport and clear of the chat control. | Edge terms remain visible at desktop widths and the mobile tooltip does not overlap the chat button; layout evidence covers both. | `src/build/static/style.css`, `src/build/popover-layout.test.ts`; 641/1024/1343px edge, 1344px transition, and mobile safe-area/chat clearance cases pass (12 relevant). | - |
+| RPF-020 | done | medium | 1 | - | - | - | 13 | Give generated Mermaid diagrams accessible names and descriptions. | Rendered diagrams expose a meaningful accessible title/description and missing metadata is deterministically handled/tested. | `src/pipeline/transform.ts`, `src/build/static/rich.js`, `src/build/mermaid-a11y.test.ts`; directive and deterministic heading fallback tests pass (54 relevant). | - |
+| RPF-021 | pending | medium | 1 | RPF-003 | - | - | 5 | Persist successful provider usage when transform or later storage fails. | Billable successful calls are logged exactly once on downstream failure and successful adds remain exactly-once. | `src/pipeline/add.ts:63-91`; `src/llm-client.ts:401-410`; R1-pointer-alignment-3 | - |
+| RPF-022 | done | medium | 1 | - | - | - | 13 | Upgrade the exact Mermaid dependency beyond the accepted advisory ranges. | Package and lock resolve Mermaid 11.16.1 or later; offline asset and diagram tests pass; no CDN is introduced. | `package.json`, `bun.lock`, `src/build/assets.test.ts`; exact 11.16.1 pin/lock installed and 10 offline asset tests pass. | - |
+| RPF-023 | done | medium | 1 | - | - | - | 13 | Make PDF resource-limit tests distinguish early and streamed rejection from parser fallback. | Tests assert header short-circuit/body cancellation and streamed over-cap termination without parser execution. | `src/ingest/arxiv.ts`, `src/ingest/pdf-resource-limits.test.ts`; declared and streamed over-cap parser non-entry/cancellation tested (42 relevant). | - |
+| RPF-024 | done | medium | 1 | - | - | - | 13 | Remove flaky real wall-clock thresholds from deadline tests. | Deadline tests assert deterministic abort/termination under injected/fake scheduling and remain stable under event-loop delay. | `src/ingest/pdf-worker.test.ts`, `src/llm-client.test.ts`; independent fake-timer stress verification passes 300/300 retry and 540/540 deadline cases. | - |
+| RPF-025 | pending | medium | 1 | - | - | - | 5 | Cover production SDK dynamic imports and constructors with fake transport. | OpenAI, Azure, and Anthropic production initialization paths execute deterministically without network or real credentials. | `src/llm-client.test.ts:110`; `src/llm-client.ts:303,342-343,375-377`; R1-testing-reviewer-6 | - |
+| RPF-026 | done | low | 2 | - | - | - | 13 | Update the stale README worker and generated-asset inventory. | README architecture tree and `_site/static` inventory mention the PDF worker, fonts, rich renderer, and conditional vendor assets accurately. | `README.md`; PDF worker, fonts, rich renderer, and conditional vendor assets documented; diff check passes. | - |
+
+Statuses: `pending`, `active`, `integrated`, `blocked`, `deferred`, `done`.
+`Sev`: `critical`, `high`, `medium`, `low`. `Prio` is a non-negative integer;
+lower runs first. `Deps` is comma-separated work IDs or `-`. `Owner` is the
+claiming `Run ID`; clear it and `Claim expires` when the item leaves `active`.
+`integrated` means implementation and targeted checks passed, so dependents may
+start, but final acceptance is still pending. `Rev` is the pointer revision at
+the last row update and decides merge conflicts. Keep every nonterminal row
+here. A terminal row may be represented by a compact durable-record index row
+after its optional detail shard is committed.
+
+## Durable record index
+
+This root-only index is the representation ledger and survives compaction.
+Keep stable IDs, dispositions/results, enough evidence to prevent duplicate
+work and prove completion, and an optional manifest `Shard ID` for detail.
+For append-only history without a native ID, use the stable merge key defined
+in the concurrency reference; changing its content creates a new record.
+
+| Record ID | Kind | Rev | Disposition or result | Compact evidence | Shard ID |
+|---|---|---:|---|---|---|
+
+## Deferred findings
+
+Every finding that is not scheduled is recorded here. Severity is never lowered
+to justify deferral, and security, correctness, or data-loss findings appear
+here only with a quoted repository rule that permits it.
+
+| ID | Sev | Confidence | Evidence (file:line) | Reason | Reopen when | Repo rule | Detail shard |
+|---|---|---|---|---|---|---|---|
+
+## Refuted findings
+
+Findings that failed the adversarial kill gate. Kept so later cycles do not
+re-raise them without new evidence.
+
+| Cycle | ID | Claim | Refuting evidence | Detail shard |
+|---|---|---|---|---|
+
+## Feedback
+
+| ID | Source | Cycle | Feedback | Disposition |
+|---|---|---|---|---|
+| R1-ai-llm-reviewer-1 | ai-llm-reviewer | 1 | Propagate request cancellation through LLM work. | RPF-005 |
+| R1-ai-llm-reviewer-2 | ai-llm-reviewer | 1 | Reject unusable provider completions before success. | RPF-006 |
+| R1-ai-llm-reviewer-3 | ai-llm-reviewer | 1 | Preserve Gemini pool state across requests. | RPF-012 |
+| R1-ai-llm-reviewer-4 | ai-llm-reviewer | 1 | Isolate untrusted content from instructions. | RPF-007 |
+| R1-api-dx-reviewer-1 | api-dx-reviewer | 1 | Fix unavailable npm onboarding path without publishing. | RPF-008 |
+| R1-api-dx-reviewer-2 | api-dx-reviewer | 1 | Validate CLI add choices before work. | RPF-013 |
+| R1-api-dx-reviewer-3 | api-dx-reviewer | 1 | Honor documented project personas. | RPF-014 |
+| R1-api-dx-reviewer-4 | api-dx-reviewer | 1 | Remove undeclared npx prerequisite. | RPF-015 |
+| R1-architecture-reviewer-1 | architecture-reviewer | 1 | Commit generated aggregate atomically. | RPF-003 |
+| R1-architecture-reviewer-2 | architecture-reviewer | 1 | Keep Gemini pool state beyond one request. | RPF-012 |
+| R1-architecture-reviewer-3 | architecture-reviewer | 1 | Bound browser chat history. | RPF-016 |
+| R1-architecture-reviewer-4 | architecture-reviewer | 1 | Separate stored and published add outcomes. | RPF-004 |
+| R1-architecture-reviewer-5 | architecture-reviewer | 1 | Align trusted proxy and quota identity. | RPF-017 |
+| R1-frontend-reviewer-1 | frontend-reviewer | 1 | Make annotation popovers Escape-dismissible. | RPF-018 |
+| R1-frontend-reviewer-2 | frontend-reviewer | 1 | Prevent popover clipping/collision. | RPF-019 |
+| R1-frontend-reviewer-3 | frontend-reviewer | 1 | Add accessible Mermaid names/descriptions. | RPF-020 |
+| R1-plan-doc-consistency-1 | plan-doc-consistency | 1 | Validate documented CLI choices. | RPF-013 |
+| R1-plan-doc-consistency-2 | plan-doc-consistency | 1 | Refresh README worker/assets inventory. | RPF-026 |
+| R1-pointer-alignment-1 | pointer-alignment | 1 | Reject invalid CLI choices before ingestion. | RPF-013 |
+| R1-pointer-alignment-2 | pointer-alignment | 1 | Send only supported chat history. | RPF-016 |
+| R1-pointer-alignment-3 | pointer-alignment | 1 | Persist usage on downstream failures. | RPF-021 |
+| R1-security-reviewer-1 | security-reviewer | 1 | Remove query-string admin credentials. | RPF-001 |
+| R1-security-reviewer-2 | security-reviewer | 1 | Repair legacy credential file modes. | RPF-002 |
+| R1-security-reviewer-3 | security-reviewer | 1 | Upgrade vulnerable Mermaid runtime. | RPF-022 |
+| R1-testing-reviewer-1 | testing-reviewer | 1 | Cover destructive remove ordering. | RPF-009 |
+| R1-testing-reviewer-2 | testing-reviewer | 1 | Cover real HTTP Bearer auth. | RPF-010 |
+| R1-testing-reviewer-3 | testing-reviewer | 1 | Prove valid real PDF extraction. | RPF-011 |
+| R1-testing-reviewer-4 | testing-reviewer | 1 | Prove PDF resource-limit guards. | RPF-023 |
+| R1-testing-reviewer-5 | testing-reviewer | 1 | Remove wall-clock test flake. | RPF-024 |
+| R1-testing-reviewer-6 | testing-reviewer | 1 | Cover real SDK initialization. | RPF-025 |
+
+| R2-user-1 | user | 2 | Choose durable stored/published state with idempotent publication retry that reuses the completed transform and avoids duplicate paid LLM work. | RPF-004 |
+| R2-protected-intake-1 | protected-classifier | 2 | Five tracked test files are uninspectable for model-context review under the current credential-pattern classifier. | GAP-002,GAP-003,GAP-004,GAP-005,GAP-006 |
+`Disposition` is the work ID it became, `deferred`, or `refuted` — never empty.
+
+## Decision log
+
+| Rev | Cycle | Run | Decision | Reason and evidence |
+|---|---|---|---|---|
+| 1 | 0 | rpf-codex-20260810T064649Z-af67 | Use a dedicated integration worktree and ignore raw review artifacts; set deployment mode to none. | Primary checkout is dirty; `.context/reviews/` is operational provenance; user explicitly requested no deployment. |
+| 5 | 1 | rpf-codex-20260810T064649Z-af67 | Accept and schedule 26 deduplicated root causes from 30 independently verified findings. | Eight reviewer artifacts and nineteen adversarial verifier units completed; see `.context/reviews/R1-verify.md` and `R1-merged.md`. |
+| 5 | 1 | rpf-codex-20260810T064649Z-af67 | Treat the npm 404 as a documentation/onboarding fix, not authorization to publish. | Publishing and deployment are explicitly forbidden for this invocation; the verifier confirmed a working source install path is independently actionable. |
+| 12 | 1 | rpf-codex-20260810T064649Z-af67 | Block RPF-004 pending an explicit product/architecture choice; do not infer stored-versus-published semantics. | Durable publication state and an explicit partial-success retry contract have materially different persistence, API, and retry behavior; repository instructions require user agreement before choosing. |
+| 14 | 2 | rpf-codex-20260812T082501Z-5b30 | Implement durable stored/published state and retry publication from the completed stored transform. | The user explicitly selected option A and renewed authority after updating the RPF definition; retries must avoid duplicate paid LLM work. |
+| 25 | 2 | rpf-codex-20260812T082501Z-5b30 | Stop before implementation and fail closed on the updated authoritative runtime capability error. | The official child decoder cannot construct its sealed result type, runtime tests report 1 failure and 4 errors across 41 cases, and the execution-authority migration is inconsistent; raw verifier transports were not accepted and no source change was retained. |
+
+Also record merge conflicts, claim takeovers, and stale lock takeovers here.
+
+## Verification evidence
+
+| Cycle | Run | Work ID or criterion | Evidence | Result |
+|---|---|---|---|---|
+| 1 | rpf-codex-20260810T064649Z-af67 | snapshot-baseline | Local branch `rpf/af67-cycle1`, commit `7d11eb98c1b1a804bf496a228fa5a2e13dbe4c92`; 29-file manifest `2fa62747fa0a428ccf582a6758b31c098c61aa61634126eb1c2a162111cd92e6` matched the primary workspace snapshot. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | review-kill-gates | 8 reviewer artifacts, 19 verifier units, 30 accepted findings, 26 root causes; `.context/reviews/R1-verify.md`. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | baseline-gate | `bun run check`: 70 pass, 0 fail, 352 assertions at `7d11eb98c1b1a804bf496a228fa5a2e13dbe4c92`. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | RPF-019 | Fixed viewport-safe positioning and mobile chat clearance; 12 relevant tests, typecheck, and diff check pass. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | RPF-024 | Deterministic fake-timer deadline coverage; 27 targeted and 540 repeated tests, typecheck, and diff check pass. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | independent-acceptance | Three fresh acceptance verifiers passed all nineteen implemented work items after one test-only gate fix; retry/deadline stress runs passed 300/300 and 540/540. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | committed-integration | Six signed local commits from `cdbd0f2bdc6392fad5a1ad5e2ce1c5e2a11379d1` through `0b0b9e0cbb7ffac486cf81fc42544ad416541959`; no push. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | configured-gate | `bun run check`: typecheck plus 115 tests, 0 failures, 633 assertions at committed HEAD `0b0b9e0cbb7ffac486cf81fc42544ad416541959`. | pass |
+| 1 | rpf-codex-20260810T064649Z-af67 | deployment-policy | No deploy, publish, push, or external restart attempted. | pass |
+| 2 | rpf-codex-20260812T082501Z-5b30 | runtime-capability | Official RPF runtime tests ran 41 cases with 1 failure and 4 errors; the sealed child-result constructor and execution-authority migration are inconsistent, so late verifier transports were rejected and the cycle stopped before implementation. | fail |
+| 2 | rpf-codex-20260812T082501Z-5b30 | baseline-diagnostic | `bun run check` completed at unchanged committed HEAD `0b0b9e0cbb7ffac486cf81fc42544ad416541959`: typecheck plus 115 tests, 0 failures, 633 assertions; Phase 4 was not reached, so this diagnostic does not make the cycle gates green. | pass |
+| 2 | rpf-codex-20260812T082501Z-5b30 | deployment-policy | No deploy, publish, push, or external restart attempted. | pass |
+
+## Cycle telemetry
+
+This is operational evidence, not a parallelism quota. `Serialization` records
+why otherwise useful overlap did not occur.
+
+| Cycle | Run | Review agents | Verify agents | Work agents | Runnable | Local | Peak | Serialization | Prefetch |
+|---|---|---:|---:|---:|---:|---:|---:|---|---|
+| 1 | rpf-codex-20260810T064649Z-af67 | 8 | 22 | 19 | 51 | 0 | 17 | dependency,overlap,controller-only | reused=0;produced=0;discarded=none |
+| 2 | rpf-codex-20260812T082501Z-5b30 | 8 | 5 | 1 | 25 | 0 | 8 | phase-barrier,runtime-capability,security-retry | reused=0;produced=0;discarded=invalid-protocol |
+<!-- rpf:managed:end -->

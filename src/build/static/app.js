@@ -1,78 +1,154 @@
-// arxiblog client: theme toggle, reading progress, TOC scroll-spy,
-// annotation popovers (touch/keyboard), and the AI chat sidebar.
+// arxiblog client: theme, reading progress, TOC, annotations, chat, and search.
 (function () {
   "use strict";
 
-  // ── Theme toggle (persisted) ──
+  // ── Theme toggle (persisted and announced) ──
+  const root = document.documentElement;
   const themeBtn = document.getElementById("theme-toggle");
-  if (themeBtn) {
-    themeBtn.addEventListener("click", function () {
-      const root = document.documentElement;
-      const current =
-        root.dataset.theme ||
-        (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-      const next = current === "dark" ? "light" : "dark";
-      root.dataset.theme = next;
-      try { localStorage.setItem("arxiblog-theme", next); } catch (e) {}
-    });
+  const themeQuery = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+
+  function resolvedTheme() {
+    if (root.dataset.theme === "dark" || root.dataset.theme === "light") return root.dataset.theme;
+    return themeQuery && themeQuery.matches ? "dark" : "light";
   }
+
+  function syncThemeControl() {
+    if (!themeBtn) return;
+    const dark = resolvedTheme() === "dark";
+    const label = dark ? "라이트 테마로 전환" : "다크 테마로 전환";
+    themeBtn.setAttribute("aria-label", label);
+    themeBtn.setAttribute("aria-pressed", String(dark));
+    themeBtn.title = label;
+    const icon = themeBtn.querySelector("[aria-hidden='true']");
+    if (icon) icon.textContent = dark ? "☀" : "☾";
+  }
+
+  if (themeBtn) {
+    syncThemeControl();
+    themeBtn.addEventListener("click", function () {
+      const next = resolvedTheme() === "dark" ? "light" : "dark";
+      root.dataset.theme = next;
+      try { localStorage.setItem("arxiblog-theme", next); } catch (_err) {}
+      syncThemeControl();
+    });
+    if (themeQuery && themeQuery.addEventListener) {
+      themeQuery.addEventListener("change", function () {
+        if (!root.dataset.theme) syncThemeControl();
+      });
+    }
+  }
+
+  // Ensure every new-tab link is protected, including links originating in post markdown.
+  document.querySelectorAll('a[target="_blank"]').forEach(function (link) {
+    link.relList.add("noopener", "noreferrer");
+    if (!link.getAttribute("aria-label")) {
+      const label = (link.textContent || "외부 링크").trim();
+      link.setAttribute("aria-label", label + "(새 탭)");
+    }
+  });
 
   // ── Reading progress bar ──
   const bar = document.getElementById("progress-bar");
   if (bar) {
-    const onScroll = function () {
-      const h = document.documentElement;
-      const max = h.scrollHeight - h.clientHeight;
-      bar.style.width = max > 0 ? (h.scrollTop / max) * 100 + "%" : "0%";
+    let progressFrame = 0;
+    const updateProgress = function () {
+      progressFrame = 0;
+      const page = document.documentElement;
+      const max = page.scrollHeight - page.clientHeight;
+      const value = max > 0 ? Math.min(100, Math.max(0, (page.scrollTop / max) * 100)) : 0;
+      bar.style.width = value + "%";
     };
-    document.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
+    const requestProgress = function () {
+      if (!progressFrame) progressFrame = requestAnimationFrame(updateProgress);
+    };
+    document.addEventListener("scroll", requestProgress, { passive: true });
+    window.addEventListener("resize", requestProgress, { passive: true });
+    updateProgress();
   }
 
   // ── TOC scroll-spy ──
   const tocLinks = Array.from(document.querySelectorAll(".toc a, .toc-mobile a"));
-  if (tocLinks.length) {
-    const map = new Map();
-    for (const a of tocLinks) {
-      const id = decodeURIComponent((a.getAttribute("href") || "").slice(1));
-      const el = document.getElementById(id);
-      if (el) map.set(el, a);
+  if (tocLinks.length && "IntersectionObserver" in window) {
+    const linksByHeading = new Map();
+    for (const link of tocLinks) {
+      let id = "";
+      try { id = decodeURIComponent((link.getAttribute("href") || "").slice(1)); } catch (_err) {}
+      const heading = id && document.getElementById(id);
+      if (!heading) continue;
+      const links = linksByHeading.get(heading) || [];
+      links.push(link);
+      linksByHeading.set(heading, links);
     }
-    if (map.size) {
-      const spy = new IntersectionObserver(
-        function (entries) {
-          for (const e of entries) {
-            if (e.isIntersecting) {
-              tocLinks.forEach((l) => l.classList.remove("active"));
-              const link = map.get(e.target);
-              if (link) link.classList.add("active");
-            }
-          }
-        },
-        { rootMargin: "-80px 0px -70% 0px" }
-      );
-      map.forEach((_link, el) => spy.observe(el));
+
+    function setCurrentHeading(heading) {
+      tocLinks.forEach(function (link) {
+        link.classList.remove("active");
+        link.removeAttribute("aria-current");
+      });
+      (linksByHeading.get(heading) || []).forEach(function (link) {
+        link.classList.add("active");
+        link.setAttribute("aria-current", "location");
+      });
     }
+
+    if (linksByHeading.size) {
+      const visible = new Set();
+      const spy = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) visible.add(entry.target);
+          else visible.delete(entry.target);
+        });
+        const first = Array.from(linksByHeading.keys()).find(function (heading) {
+          return visible.has(heading);
+        });
+        if (first) setCurrentHeading(first);
+      }, { rootMargin: "-80px 0px -70% 0px" });
+      linksByHeading.forEach(function (_links, heading) { spy.observe(heading); });
+    }
+
+    document.querySelectorAll(".toc-mobile a").forEach(function (link) {
+      link.addEventListener("click", function () {
+        const details = link.closest("details");
+        if (details) details.open = false;
+      });
+    });
   }
 
-  // ── Annotation popovers: hover via CSS; click/tap + Esc for touch & a11y ──
-  document.addEventListener("click", function (e) {
-    const annot = e.target.closest && e.target.closest(".annot");
-    document.querySelectorAll(".annot.open").forEach(function (el) {
-      if (el !== annot) el.classList.remove("open");
-    });
-    if (annot && !(e.target.closest && e.target.closest(".annot-pop"))) {
-      annot.classList.toggle("open");
+  // ── Annotation popovers: mouse, touch, and keyboard ──
+  const annotations = Array.from(document.querySelectorAll(".annot"));
+  function setAnnotationOpen(annotation, open) {
+    annotation.classList.toggle("open", open);
+    annotation.setAttribute("aria-expanded", String(open));
+  }
+  annotations.forEach(function (annotation, index) {
+    const popover = annotation.querySelector(".annot-pop");
+    annotation.setAttribute("role", "button");
+    annotation.setAttribute("aria-expanded", "false");
+    if (popover) {
+      if (!popover.id) popover.id = "annotation-" + (index + 1);
+      popover.setAttribute("role", "tooltip");
+      annotation.setAttribute("aria-describedby", popover.id);
     }
+    annotation.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        const willOpen = !annotation.classList.contains("open");
+        annotations.forEach(function (other) { setAnnotationOpen(other, other === annotation && willOpen); });
+      }
+    });
   });
-  document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") {
-      document.querySelectorAll(".annot.open").forEach((el) => el.classList.remove("open"));
-      closeChat();
+  document.addEventListener("click", function (event) {
+    const target = event.target;
+    const annotation = target && target.closest && target.closest(".annot");
+    annotations.forEach(function (item) {
+      if (item !== annotation) setAnnotationOpen(item, false);
+    });
+    if (annotation && !(target.closest && target.closest(".annot-pop"))) {
+      setAnnotationOpen(annotation, !annotation.classList.contains("open"));
     }
   });
 
-  // ── Chat sidebar ──
+  // ── Chat dialog ──
   const toggle = document.getElementById("chat-toggle");
   const panel = document.getElementById("chat-panel");
   const closeBtn = document.getElementById("chat-close");
@@ -81,143 +157,279 @@
   const log = document.getElementById("chat-log");
   const slug = document.body.getAttribute("data-slug");
   const history = [];
+  let busy = false;
+  let lastFocused = null;
+  let closeChat = function () {};
 
-  function openChat() { if (panel) { panel.hidden = false; setTimeout(() => input && input.focus(), 50); } }
-  function closeChat() { if (panel) panel.hidden = true; }
+  function focusableInPanel() {
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll('button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'))
+      .filter(function (element) { return !element.hidden; });
+  }
+
+  function openChat() {
+    if (!panel) return;
+    if (panel.hidden) {
+      lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      panel.hidden = false;
+      document.body.classList.add("chat-open");
+      if (toggle) toggle.setAttribute("aria-expanded", "true");
+    }
+    requestAnimationFrame(function () { if (input) input.focus(); });
+  }
+
+  closeChat = function () {
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    document.body.classList.remove("chat-open");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    const returnTarget = lastFocused && document.contains(lastFocused) ? lastFocused : toggle;
+    lastFocused = null;
+    if (returnTarget) returnTarget.focus();
+  };
+
   if (toggle) toggle.addEventListener("click", openChat);
   if (closeBtn) closeBtn.addEventListener("click", closeChat);
+  if (panel) {
+    panel.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") return;
+      const focusable = focusableInPanel();
+      if (!focusable.length) { event.preventDefault(); return; }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+  }
 
-  if (input) {
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") return;
+    const openAnnotations = annotations.filter(function (annotation) {
+      return annotation.classList.contains("open");
+    });
+    openAnnotations.forEach(function (annotation) { setAnnotationOpen(annotation, false); });
+    if (panel && !panel.hidden) {
+      event.preventDefault();
+      closeChat();
+    } else if (openAnnotations.length && openAnnotations[0] instanceof HTMLElement) {
+      openAnnotations[0].focus();
+    }
+  });
+
+  if (input && form) {
     input.addEventListener("input", function () {
       input.style.height = "auto";
       input.style.height = Math.min(input.scrollHeight, 140) + "px";
     });
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
     });
   }
 
-  function addMsg(role, text) {
-    const div = document.createElement("div");
-    div.className = "chat-msg " + role;
-    div.textContent = text;
-    log.appendChild(div);
+  function addMessage(role, message) {
+    if (!log) return null;
+    const item = document.createElement("div");
+    item.className = "chat-msg " + role;
+    item.setAttribute("aria-label", role === "user" ? "나" : "AI");
+    item.textContent = message;
+    log.appendChild(item);
     log.scrollTop = log.scrollHeight;
-    return div;
+    return item;
   }
 
-  let busy = false;
-  async function send(q) {
-    q = (q || "").trim();
-    if (!q || busy) return;
-    busy = true;
-    addMsg("user", q);
-    history.push({ role: "user", content: q });
-    const typing = addMsg("bot", "…");
-    typing.classList.add("chat-typing");
-    const btn = form && form.querySelector("button");
-    if (btn) btn.disabled = true;
+  function setChatBusy(nextBusy) {
+    busy = nextBusy;
+    if (log) log.setAttribute("aria-busy", String(nextBusy));
+    if (form) form.setAttribute("aria-busy", String(nextBusy));
+    if (input) {
+      input.readOnly = nextBusy;
+      input.setAttribute("aria-disabled", String(nextBusy));
+    }
+    const submit = form && form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = nextBusy;
+    document.querySelectorAll(".ask-chip").forEach(function (chip) { chip.disabled = nextBusy; });
+  }
+
+  function removeTurn(turn) {
+    const index = history.lastIndexOf(turn);
+    if (index >= 0) history.splice(index, 1);
+  }
+
+  function showRetry(messageElement, message, question) {
+    if (!messageElement) return;
+    messageElement.classList.remove("chat-typing");
+    messageElement.classList.add("chat-error");
+    messageElement.setAttribute("role", "alert");
+    messageElement.textContent = message + " ";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "chat-retry";
+    retry.textContent = "다시 시도";
+    retry.addEventListener("click", function () {
+      messageElement.remove();
+      send(question, false);
+    });
+    messageElement.appendChild(retry);
+  }
+
+  async function send(question, renderUser) {
+    const q = (question || "").trim();
+    if (!q || busy || !form || !log || !slug) return;
+    setChatBusy(true);
+    if (renderUser !== false) addMessage("user", q);
+    const userTurn = { role: "user", content: q };
+    history.push(userTurn);
+    const pending = addMessage("bot", "답변을 작성하고 있어요…");
+    if (pending) pending.classList.add("chat-typing");
+
     try {
-      const resp = await fetch("/api/chat", {
+      const endpoint = new URL("../api/chat", window.location.href);
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
       });
-      if (!resp.ok) {
-        let serverMsg = "";
-        try { const ej = await resp.json(); serverMsg = ej.error || ej.answer || ""; } catch (e2) {}
-        typing.classList.remove("chat-typing");
-        typing.textContent =
-          serverMsg ||
-          (resp.status === 404
-            ? "채팅은 로컬 `arxiblog serve` 모드에서만 동작합니다."
-            : "오류가 발생했습니다 (" + resp.status + ").");
+      let data = null;
+      try { data = await response.json(); } catch (_err) {}
+      if (!response.ok) {
+        removeTurn(userTurn);
+        const serverMessage = data && (data.error || data.answer);
+        const fallback = response.status === 404
+          ? "AI 질문은 arxiblog serve로 실행할 때 사용할 수 있어요."
+          : response.status === 429
+            ? "요청이 많아 잠시 답변할 수 없어요. 잠시 후 다시 시도해 주세요."
+            : "답변을 가져오지 못했어요 (" + response.status + ").";
+        showRetry(pending, serverMessage || fallback, q);
         return;
       }
-      const data = await resp.json();
-      const answer = (data && data.answer) || "답변을 생성하지 못했습니다.";
-      typing.classList.remove("chat-typing");
-      typing.textContent = answer;
+      const answer = data && typeof data.answer === "string" ? data.answer.trim() : "";
+      if (!answer) {
+        removeTurn(userTurn);
+        showRetry(pending, "비어 있는 답변을 받았어요.", q);
+        return;
+      }
+      if (pending) {
+        pending.classList.remove("chat-typing");
+        pending.textContent = answer;
+      }
       history.push({ role: "assistant", content: answer });
-    } catch (err) {
-      typing.classList.remove("chat-typing");
-      typing.textContent = "연결할 수 없습니다. `arxiblog serve` 로 실행 중인지 확인하세요.";
+    } catch (_err) {
+      removeTurn(userTurn);
+      showRetry(pending, "서버에 연결할 수 없어요. 실행 상태를 확인해 주세요.", q);
     } finally {
-      busy = false;
-      if (btn) btn.disabled = false;
+      setChatBusy(false);
       log.scrollTop = log.scrollHeight;
     }
   }
 
-  if (form) {
-    form.addEventListener("submit", function (e) {
-      e.preventDefault();
-      const q = (input.value || "").trim();
-      if (!q) return;
+  if (form && input) {
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      const question = input.value.trim();
+      if (!question || busy) return;
       input.value = "";
       input.style.height = "auto";
-      send(q);
+      send(question, true);
     });
   }
 
-  // Suggested-question chips → open chat and ask
   document.querySelectorAll(".ask-chip").forEach(function (chip) {
     chip.addEventListener("click", function () {
       openChat();
-      send(chip.getAttribute("data-q"));
+      send(chip.getAttribute("data-q"), true);
     });
   });
 
-  // ── Select-to-ask: highlight text in the post → floating "ask" button ──
+  // ── Select-to-ask ──
   const postBody = document.querySelector(".post-body");
   if (postBody && form) {
-    const askBtn = document.createElement("button");
-    askBtn.className = "select-ask";
-    askBtn.textContent = "🤔 이 부분 물어보기";
-    askBtn.hidden = true;
-    document.body.appendChild(askBtn);
+    const askButton = document.createElement("button");
+    askButton.type = "button";
+    askButton.className = "select-ask";
+    askButton.textContent = "🤔 이 부분 물어보기";
+    askButton.setAttribute("aria-label", "선택한 문장을 AI에게 질문하기");
+    askButton.hidden = true;
+    document.body.appendChild(askButton);
     let selectedText = "";
 
-    const hideAsk = () => { askBtn.hidden = true; };
+    const hideAsk = function () { askButton.hidden = true; };
     document.addEventListener("selectionchange", function () {
-      const sel = document.getSelection();
-      if (!sel || sel.isCollapsed) { hideAsk(); return; }
-      const text = sel.toString().trim();
-      const anchor = sel.anchorNode;
-      if (text.length < 8 || text.length > 600 || !anchor || !postBody.contains(anchor.parentNode)) {
+      const selection = document.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) { hideAsk(); return; }
+      const text = selection.toString().trim();
+      const range = selection.getRangeAt(0);
+      const ancestor = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentElement
+        : range.commonAncestorContainer;
+      if (text.length < 8 || text.length > 600 || !ancestor || !postBody.contains(ancestor)) {
         hideAsk();
         return;
       }
       selectedText = text;
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      askBtn.style.top = window.scrollY + rect.top - 44 + "px";
-      askBtn.style.left = window.scrollX + rect.left + rect.width / 2 + "px";
-      askBtn.hidden = false;
+      const rect = range.getBoundingClientRect();
+      askButton.style.top = window.scrollY + rect.top - 44 + "px";
+      askButton.style.left = window.scrollX + rect.left + rect.width / 2 + "px";
+      askButton.hidden = false;
     });
-    askBtn.addEventListener("mousedown", function (e) { e.preventDefault(); });
-    askBtn.addEventListener("click", function () {
+    askButton.addEventListener("mousedown", function (event) { event.preventDefault(); });
+    askButton.addEventListener("click", function () {
       hideAsk();
       openChat();
-      send('이 부분을 쉽게 풀어서 설명해줘:\n"' + selectedText + '"');
-      const sel = document.getSelection(); if (sel) sel.removeAllRanges();
+      send('이 부분을 쉽게 풀어서 설명해줘:\n"' + selectedText + '"', true);
+      const selection = document.getSelection();
+      if (selection) selection.removeAllRanges();
     });
     document.addEventListener("scroll", hideAsk, { passive: true });
+    window.addEventListener("resize", hideAsk, { passive: true });
   }
 
-  // ── Home search: filter cards ──
+  // ── Home search ──
   const search = document.getElementById("post-search");
   if (search) {
     const cards = Array.from(document.querySelectorAll("#cards .card"));
-    const emptyMsg = document.getElementById("search-empty");
-    search.addEventListener("input", function () {
-      const q = search.value.trim().toLowerCase();
+    const emptyMessage = document.getElementById("search-empty");
+    const searchStatus = document.getElementById("search-status");
+    let announceTimer = 0;
+    const normalize = function (value) {
+      const text = String(value || "");
+      return (text.normalize ? text.normalize("NFKC") : text).toLocaleLowerCase("ko-KR");
+    };
+    const filterCards = function () {
+      const query = normalize(search.value.trim());
       let shown = 0;
-      cards.forEach(function (c) {
-        const hit = !q || (c.getAttribute("data-search") || "").includes(q);
-        c.style.display = hit ? "" : "none";
+      cards.forEach(function (card) {
+        const hit = !query || normalize(card.getAttribute("data-search")).includes(query);
+        card.hidden = !hit;
         if (hit) shown++;
       });
-      if (emptyMsg) emptyMsg.hidden = shown !== 0;
+      if (emptyMessage) emptyMessage.hidden = !query || shown !== 0;
+      window.clearTimeout(announceTimer);
+      announceTimer = window.setTimeout(function () {
+        if (searchStatus) {
+          searchStatus.textContent = query
+            ? shown
+              ? "검색 결과 " + shown + "개"
+              : "검색 결과가 없습니다. 다른 검색어를 입력해 보세요."
+            : "";
+        }
+      }, 120);
+    };
+    search.addEventListener("input", filterCards);
+    search.addEventListener("search", filterCards);
+    search.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && search.value) {
+        event.preventDefault();
+        search.value = "";
+        filterCards();
+      }
     });
   }
 })();

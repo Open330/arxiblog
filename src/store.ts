@@ -1,4 +1,20 @@
 import { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, existsSync } from "node:fs";
+
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * A crashed worker must not hold a paid-chat slot forever. This is deliberately
+ * longer than the HTTP/provider deadline, while still making crash recovery
+ * automatic without a separate cleanup job.
+ */
+export const CHAT_QUOTA_RESERVATION_TTL_MS = 10 * 60 * 1_000;
+
+export type ChatQuotaReservation =
+  | { ok: true; reservationId?: string }
+  | { ok: false; reason: "global" | "ip" | "concurrency" };
 
 export interface Paper {
   id: number;
@@ -99,14 +115,25 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS chat_quota_events (
+  reservation_id TEXT PRIMARY KEY,
+  ip_hash TEXT NOT NULL,
+  reserved_at_ms INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+  settled_at_ms INTEGER
+);
 CREATE INDEX IF NOT EXISTS idx_posts_paper ON posts(paper_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_post ON annotations(post_id);
+CREATE INDEX IF NOT EXISTS idx_chat_quota_ip_time ON chat_quota_events(ip_hash, reserved_at_ms);
+CREATE INDEX IF NOT EXISTS idx_chat_quota_status_time ON chat_quota_events(status, reserved_at_ms);
 `;
 
 export class Store {
   private db: Database;
+  private readonly dbPath: string;
 
   constructor(dbPath: string) {
+    this.dbPath = dbPath;
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA busy_timeout = 30000");
     this.db.exec("PRAGMA journal_mode=WAL");
@@ -126,6 +153,21 @@ export class Store {
     };
     for (const [name, type] of Object.entries(newCols)) {
       if (!existing.has(name)) this.db.exec(`ALTER TABLE posts ADD COLUMN ${name} ${type}`);
+    }
+    this.protectDatabaseFiles();
+  }
+
+  /** The database contains paper text, usage data, and pseudonymous quota keys. */
+  private protectDatabaseFiles(): void {
+    if (this.dbPath === ":memory:") return;
+    for (const path of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
+      if (!existsSync(path)) continue;
+      try {
+        chmodSync(path, 0o600);
+      } catch {
+        // Read/write failures will surface through SQLite itself. Permission
+        // hardening is best-effort on filesystems that do not support chmod.
+      }
     }
   }
 
@@ -178,12 +220,23 @@ export class Store {
     who_should_read?: string;
     suggested_questions?: string[];
   }): Post {
-    // One post per paper: drop any stale post for this paper whose slug differs
-    // (e.g. re-running `add` produced a slightly different title → new slug).
-    // Annotations cascade-delete via the post FK.
-    this.db.prepare("DELETE FROM posts WHERE paper_id = ? AND slug <> ?").run(p.paper_id, p.slug);
-    this.db
-      .prepare(
+    const save = this.db.transaction((input: typeof p): Post => {
+      // A slug collision must never move another paper's post. This can occur
+      // with imported/legacy data even though generated slugs normally include
+      // the arXiv id.
+      const owner = this.db.prepare("SELECT paper_id FROM posts WHERE slug=?").get(input.slug) as
+        | { paper_id: number }
+        | undefined;
+      if (owner && owner.paper_id !== input.paper_id) {
+        throw new Error(`이미 다른 논문에서 사용 중인 slug입니다: ${input.slug}`);
+      }
+
+      // One post per paper: drop any stale post for this paper whose slug differs
+      // (e.g. re-running `add` produced a slightly different title → new slug).
+      // Keep this deletion in the same transaction as the replacement so a
+      // failed insert cannot erase the last good post and its annotations.
+      this.db.prepare("DELETE FROM posts WHERE paper_id = ? AND slug <> ?").run(input.paper_id, input.slug);
+      this.db.prepare(
         `INSERT INTO posts (paper_id, slug, title, subtitle, tldr, takeaways, level, reading_minutes, content, persona,
             contributions, strengths, limitations, prerequisites, who_should_read, suggested_questions)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -194,26 +247,27 @@ export class Store {
            contributions=excluded.contributions, strengths=excluded.strengths, limitations=excluded.limitations,
            prerequisites=excluded.prerequisites, who_should_read=excluded.who_should_read,
            suggested_questions=excluded.suggested_questions`
-      )
-      .run(
-        p.paper_id,
-        p.slug,
-        p.title,
-        p.subtitle,
-        p.tldr,
-        JSON.stringify(p.takeaways),
-        p.level,
-        p.reading_minutes,
-        p.content,
-        p.persona,
-        JSON.stringify(p.contributions ?? []),
-        JSON.stringify(p.strengths ?? []),
-        JSON.stringify(p.limitations ?? []),
-        JSON.stringify(p.prerequisites ?? []),
-        p.who_should_read ?? "",
-        JSON.stringify(p.suggested_questions ?? [])
+      ).run(
+        input.paper_id,
+        input.slug,
+        input.title,
+        input.subtitle,
+        input.tldr,
+        JSON.stringify(input.takeaways),
+        input.level,
+        input.reading_minutes,
+        input.content,
+        input.persona,
+        JSON.stringify(input.contributions ?? []),
+        JSON.stringify(input.strengths ?? []),
+        JSON.stringify(input.limitations ?? []),
+        JSON.stringify(input.prerequisites ?? []),
+        input.who_should_read ?? "",
+        JSON.stringify(input.suggested_questions ?? [])
       );
-    return this.db.prepare("SELECT * FROM posts WHERE slug=?").get(p.slug) as Post;
+      return this.db.prepare("SELECT * FROM posts WHERE slug=?").get(input.slug) as Post;
+    });
+    return save(p);
   }
 
   getPost(slug: string): Post | null {
@@ -245,9 +299,11 @@ export class Store {
   // --- Annotations ---
 
   replaceAnnotations(postId: number, annotations: Array<{ term: string; kind: string; explanation: string }>): void {
-    this.db.prepare("DELETE FROM annotations WHERE post_id=?").run(postId);
     const insert = this.db.prepare("INSERT INTO annotations (post_id, term, kind, explanation) VALUES (?, ?, ?, ?)");
     const tx = this.db.transaction((rows: typeof annotations) => {
+      // Delete and replacement are one unit: a malformed row or disk error must
+      // not discard the previously valid glossary.
+      this.db.prepare("DELETE FROM annotations WHERE post_id=?").run(postId);
       for (const a of rows) insert.run(postId, a.term, a.kind || "jargon", a.explanation);
     });
     tx(annotations);
@@ -274,5 +330,111 @@ export class Store {
       )
       .get() as { totalCalls: number; totalTokens: number; totalCost: number };
     return row;
+  }
+
+  // --- Public chat quota ---
+
+  /**
+   * Atomically check per-IP, daily, and in-flight limits and reserve one slot.
+   *
+   * Per-IP quota intentionally counts every admitted attempt for one rolling
+   * hour (including an upstream failure), preserving the previous abuse guard.
+   * Global quota counts only pending/successful calls; settling a failure
+   * releases that paid-call slot immediately.
+   */
+  reserveChatQuota(
+    ip: string,
+    perIpPerHour: number,
+    globalPerDay: number,
+    at = Date.now(),
+    maxInFlight = 0
+  ): ChatQuotaReservation {
+    const perIpLimit = Number.isFinite(perIpPerHour) && perIpPerHour > 0 ? Math.floor(perIpPerHour) : 0;
+    const globalLimit = Number.isFinite(globalPerDay) && globalPerDay > 0 ? Math.floor(globalPerDay) : 0;
+    const concurrencyLimit = Number.isFinite(maxInFlight) && maxInFlight > 0 ? Math.floor(maxInFlight) : 0;
+    if (perIpLimit === 0 && globalLimit === 0 && concurrencyLimit === 0) return { ok: true };
+
+    const timestamp = Number.isFinite(at) ? Math.trunc(at) : Date.now();
+    // Namespace the digest so the database never stores the source address and
+    // the same address maps consistently across restarts and server processes.
+    const normalizedIp = ip.trim().toLowerCase() || "unknown";
+    const ipHash = createHash("sha256")
+      .update("arxiblog-chat-quota:v1\0")
+      .update(normalizedIp)
+      .digest("hex");
+    const reservationId = randomUUID();
+    const dayStart = Math.floor(timestamp / DAY_MS) * DAY_MS;
+    const hourStart = timestamp - HOUR_MS;
+
+    const reserve = this.db.transaction((): ChatQuotaReservation => {
+      // Turn abandoned reservations into failed attempts. They continue to
+      // count against the per-IP abuse window, but no longer consume global
+      // paid quota.
+      this.db.prepare(
+        `UPDATE chat_quota_events
+         SET status='failed', settled_at_ms=?
+         WHERE status='pending' AND reserved_at_ms <= ?`
+      ).run(timestamp, timestamp - CHAT_QUOTA_RESERVATION_TTL_MS);
+
+      // Keep today's global successes and the current rolling IP window. This
+      // cleanup is part of admission so deployments need no maintenance job.
+      const retentionFloor = Math.min(dayStart, hourStart);
+      this.db.prepare(
+        `DELETE FROM chat_quota_events
+         WHERE (status='failed' AND reserved_at_ms <= ?)
+            OR (status IN ('pending', 'succeeded') AND reserved_at_ms < ?)`
+      ).run(hourStart, retentionFloor);
+
+      if (concurrencyLimit > 0) {
+        const row = this.db.prepare(
+          "SELECT COUNT(*) AS count FROM chat_quota_events WHERE status='pending'"
+        ).get() as { count: number };
+        if (row.count >= concurrencyLimit) return { ok: false, reason: "concurrency" };
+      }
+
+      if (globalLimit > 0) {
+        const row = this.db.prepare(
+          `SELECT COUNT(*) AS count
+           FROM chat_quota_events
+           WHERE reserved_at_ms >= ? AND reserved_at_ms < ?
+             AND status IN ('pending', 'succeeded')`
+        ).get(dayStart, dayStart + DAY_MS) as { count: number };
+        if (row.count >= globalLimit) return { ok: false, reason: "global" };
+      }
+
+      if (perIpLimit > 0) {
+        const row = this.db.prepare(
+          `SELECT COUNT(*) AS count
+           FROM chat_quota_events
+           WHERE ip_hash = ? AND reserved_at_ms > ?`
+        ).get(ipHash, hourStart) as { count: number };
+        if (row.count >= perIpLimit) return { ok: false, reason: "ip" };
+      }
+
+      this.db.prepare(
+        `INSERT INTO chat_quota_events
+           (reservation_id, ip_hash, reserved_at_ms, status)
+         VALUES (?, ?, ?, 'pending')`
+      ).run(reservationId, ipHash, timestamp);
+      return { ok: true, reservationId };
+    });
+
+    // BEGIN IMMEDIATE serializes the check-and-insert across every SQLite
+    // connection, preventing two Bun processes from racing past the cap.
+    return reserve.immediate();
+  }
+
+  /** Settle once. Repeated/late callbacks are harmless. */
+  settleChatQuota(reservationId: string | undefined, success: boolean, at = Date.now()): void {
+    if (!reservationId) return;
+    const timestamp = Number.isFinite(at) ? Math.trunc(at) : Date.now();
+    const settle = this.db.transaction(() => {
+      this.db.prepare(
+        `UPDATE chat_quota_events
+         SET status=?, settled_at_ms=?
+         WHERE reservation_id=? AND status='pending'`
+      ).run(success ? "succeeded" : "failed", timestamp, reservationId);
+    });
+    settle.immediate();
   }
 }
