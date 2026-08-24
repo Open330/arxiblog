@@ -215,6 +215,21 @@ export function startServer(projectRoot: string, port: number, host = "localhost
 
   const chatLimiter = makeChatLimiter(store);
 
+  // Lightweight in-memory guards for the public engagement endpoints.
+  const viewSeen = new Set<string>(); // `${ip}|${slug}|${day}` — one view per IP/post/day
+  const reactSeen = new Set<string>(); // `${ip}|${slug}` — one reaction per IP/post
+  const engageHits = new Map<string, number[]>(); // per-IP flood guard
+  const engageOk = (ip: string): boolean => {
+    const now = Date.now();
+    const recent = (engageHits.get(ip) || []).filter((t) => now - t < 60_000);
+    if (recent.length >= 120) return false; // 120 engagement req / IP / min
+    recent.push(now);
+    engageHits.set(ip, recent);
+    if (engageHits.size > 5000)
+      for (const [k, v] of engageHits) if (!v.some((t) => now - t < 60_000)) engageHits.delete(k);
+    return true;
+  };
+
   // Serialize add/settings/delete so concurrent writes + rebuilds don't race.
   let writeChain: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -294,6 +309,54 @@ export function startServer(projectRoot: string, port: number, host = "localhost
         }, { headers: { "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" } });
       }
       if (path === "/api/posts") return methodNotAllowed("GET");
+
+      // ── Engagement (public, abuse-guarded, best-effort) ──
+      const engIp = () => clientIp(req, server, !!initialConfig.chat?.trust_proxy);
+      if (path === "/api/view" && req.method === "POST") {
+        const ip = engIp();
+        if (!engageOk(ip)) return Response.json({ views: 0, reactions: 0 }, { status: 429 });
+        try {
+          const { slug } = (await req.json()) as { slug?: string };
+          if (slug && store.getPost(slug)) {
+            const key = `${ip}|${slug}|${new Date(Date.now()).toISOString().slice(0, 10)}`;
+            if (!viewSeen.has(key)) { viewSeen.add(key); store.incrementView(slug); }
+            return Response.json(store.getStats(slug));
+          }
+        } catch { /* ignore */ }
+        return Response.json({ views: 0, reactions: 0 });
+      }
+      if (path === "/api/view") return methodNotAllowed("POST");
+      if (path === "/api/react" && req.method === "POST") {
+        const ip = engIp();
+        if (!engageOk(ip)) return Response.json({ error: "잠시 후 다시 시도해 주세요." }, { status: 429 });
+        try {
+          const { slug } = (await req.json()) as { slug?: string };
+          if (!slug || !store.getPost(slug)) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
+          const key = `${ip}|${slug}`;
+          const reactions = reactSeen.has(key) ? store.getStats(slug).reactions : (reactSeen.add(key), store.incrementReaction(slug));
+          return Response.json({ reactions });
+        } catch (e) { return Response.json({ error: (e as Error).message }, { status: 500 }); }
+      }
+      if (path === "/api/react") return methodNotAllowed("POST");
+      if (path === "/api/stats" && req.method === "GET") {
+        const slug = url.searchParams.get("slug") || "";
+        return Response.json(store.getStats(slug), { headers: { "Cache-Control": "no-cache" } });
+      }
+      if (path === "/api/stats") return methodNotAllowed("GET");
+      if (path === "/api/subscribe" && req.method === "POST") {
+        const ip = engIp();
+        if (!engageOk(ip)) return Response.json({ error: "잠시 후 다시 시도해 주세요." }, { status: 429 });
+        try {
+          const { email } = (await req.json()) as { email?: string };
+          const e = (email || "").trim().toLowerCase();
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) || e.length > 200) {
+            return Response.json({ error: "유효한 이메일을 입력해 주세요." }, { status: 400 });
+          }
+          store.addSubscriber(e);
+          return Response.json({ ok: true });
+        } catch (err) { return Response.json({ error: (err as Error).message }, { status: 500 }); }
+      }
+      if (path === "/api/subscribe") return methodNotAllowed("POST");
 
       // ── Token-gated admin APIs ──
       if (path === "/api/config" && req.method === "GET") {

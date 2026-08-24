@@ -450,4 +450,80 @@
       }
     });
   }
+
+  // ── Engagement: views + reactions + newsletter ──
+  (function engagement() {
+    function apiUrl(p) { try { return new URL("../api/" + p, window.location.href); } catch (_e) { return null; } }
+    function fmt(n) { try { return Number(n).toLocaleString("ko-KR"); } catch (_e) { return String(n); } }
+
+    var pageSlug = document.body.getAttribute("data-slug");
+    var statsEl = document.getElementById("post-stats");
+    var reactBtn = document.getElementById("react-btn");
+    var reactCount = document.getElementById("react-count");
+
+    function renderStats(s) {
+      if (!s) return;
+      if (statsEl && typeof s.views === "number") { statsEl.textContent = "조회 " + fmt(s.views); }
+      if (reactCount && typeof s.reactions === "number") { reactCount.textContent = fmt(s.reactions); }
+    }
+
+    if (pageSlug && (statsEl || reactBtn)) {
+      var viewUrl = apiUrl("view");
+      if (viewUrl) {
+        fetch(viewUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug: pageSlug }),
+          keepalive: true,
+        }).then(function (r) { return r.ok ? r.json() : null; }).then(renderStats).catch(function () {});
+      }
+
+      var reactedKey = "arxiblog:reacted:" + pageSlug;
+      var reacted = false;
+      try { reacted = localStorage.getItem(reactedKey) === "1"; } catch (_e) {}
+      if (reactBtn && reacted) { reactBtn.setAttribute("aria-pressed", "true"); reactBtn.classList.add("reacted"); }
+      if (reactBtn) {
+        reactBtn.addEventListener("click", function () {
+          if (reactBtn.getAttribute("aria-pressed") === "true") return;
+          reactBtn.setAttribute("aria-pressed", "true");
+          reactBtn.classList.add("reacted");
+          try { localStorage.setItem(reactedKey, "1"); } catch (_e) {}
+          var reactUrl = apiUrl("react");
+          if (!reactUrl) return;
+          fetch(reactUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slug: pageSlug }),
+          }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+            if (d && typeof d.reactions === "number" && reactCount) { reactCount.textContent = fmt(d.reactions); }
+          }).catch(function () {});
+        });
+      }
+    }
+
+    var subForm = document.getElementById("subscribe-form");
+    var subStatus = document.getElementById("subscribe-status");
+    var subEmail = document.getElementById("subscribe-email");
+    if (subForm) {
+      subForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var email = ((subEmail && subEmail.value) || "").trim();
+        function setStatus(msg, kind) { if (subStatus) { subStatus.textContent = msg; subStatus.className = "subscribe-status" + (kind ? " " + kind : ""); } }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { setStatus("유효한 이메일을 입력해 주세요.", "error"); return; }
+        var subUrl = apiUrl("subscribe");
+        if (!subUrl) return;
+        setStatus("구독 중…", "");
+        fetch(subUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email }),
+        }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }, function () { return { ok: r.ok, d: null }; }); })
+          .then(function (res) {
+            if (res.ok && res.d && res.d.ok) { setStatus("구독 완료! 새 글이 올라오면 알려드릴게요.", "ok"); subForm.reset(); }
+            else { setStatus((res.d && res.d.error) || "구독에 실패했어요. 잠시 후 다시 시도해 주세요.", "error"); }
+          }).catch(function () { setStatus("구독에 실패했어요. 잠시 후 다시 시도해 주세요.", "error"); });
+      });
+    }
+  })();
+
 })();

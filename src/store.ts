@@ -132,6 +132,15 @@ CREATE INDEX IF NOT EXISTS idx_posts_paper ON posts(paper_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_post ON annotations(post_id);
 CREATE INDEX IF NOT EXISTS idx_chat_quota_ip_time ON chat_quota_events(ip_hash, reserved_at_ms);
 CREATE INDEX IF NOT EXISTS idx_chat_quota_status_time ON chat_quota_events(status, reserved_at_ms);
+CREATE TABLE IF NOT EXISTS post_stats (
+  slug TEXT PRIMARY KEY,
+  views INTEGER NOT NULL DEFAULT 0,
+  reactions INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS subscribers (
+  email TEXT PRIMARY KEY,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `;
 
 export class Store {
@@ -347,6 +356,42 @@ export class Store {
       )
       .get() as { totalCalls: number; totalTokens: number; totalCost: number };
     return row;
+  }
+
+  // --- Engagement (views / reactions) ---
+
+  incrementView(slug: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO post_stats (slug, views, reactions) VALUES (?, 1, 0) ON CONFLICT(slug) DO UPDATE SET views = views + 1"
+      )
+      .run(slug);
+  }
+
+  incrementReaction(slug: string): number {
+    this.db
+      .prepare(
+        "INSERT INTO post_stats (slug, views, reactions) VALUES (?, 0, 1) ON CONFLICT(slug) DO UPDATE SET reactions = reactions + 1"
+      )
+      .run(slug);
+    return (this.db.prepare("SELECT reactions FROM post_stats WHERE slug = ?").get(slug) as { reactions: number }).reactions;
+  }
+
+  getStats(slug: string): { views: number; reactions: number } {
+    const row = this.db.prepare("SELECT views, reactions FROM post_stats WHERE slug = ?").get(slug) as
+      | { views: number; reactions: number }
+      | undefined;
+    return row ?? { views: 0, reactions: 0 };
+  }
+
+  // --- Newsletter subscribers ---
+
+  addSubscriber(email: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO subscribers (email) VALUES (?)").run(email);
+  }
+
+  countSubscribers(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS c FROM subscribers").get() as { c: number }).c;
   }
 
   // --- Public chat quota ---

@@ -319,6 +319,7 @@ ${siteHeader("../", opts.config.project.name)}
       ${catHtml ? `<span class="cats">${catHtml}</span>` : ""}
       <span>${post.reading_minutes}분 읽기</span>
       <span class="level level-${escapeHtml(post.level)}">${post.level === "intermediate" ? "중급" : "입문"}</span>
+      <span id="post-stats" class="post-stats" aria-live="polite"></span>
     </div>
     <h1 id="post-title" class="post-title">${escapeHtml(displayTitle)}</h1>
     ${displaySubtitle ? `<p class="post-subtitle">${escapeHtml(displaySubtitle)}</p>` : ""}
@@ -347,6 +348,14 @@ ${siteHeader("../", opts.config.project.name)}
     ${glossary}
     ${isEn ? "" : citationsHtml}
     ${isEn ? "" : relatedHtml}
+
+    <div class="post-engage">
+      <button id="react-btn" class="react-btn" type="button" aria-pressed="false" aria-label="이 글이 도움됐어요">
+        <span class="react-emoji" aria-hidden="true">👍</span>
+        <span class="react-label">도움돼요</span>
+        <span id="react-count" class="react-count">0</span>
+      </button>
+    </div>
 
     <footer class="post-footer">
       이 글은 <a href="${escapeHtml(absUrl)}" target="_blank" rel="noopener noreferrer" aria-label="arXiv 원문 보기(새 탭)">arXiv:${escapeHtml(arxivId)}</a> 논문을
@@ -451,6 +460,18 @@ ${siteHeader("./", config.project.name)}
     <p id="search-empty" class="search-empty" hidden aria-hidden="true">검색 결과가 없습니다. 다른 검색어를 입력해 보세요.</p>
   </section>
 </main>
+<section class="subscribe" aria-labelledby="subscribe-title">
+  <div class="subscribe-inner">
+    <h2 id="subscribe-title" class="subscribe-title">새 글 알림 받기</h2>
+    <p class="subscribe-sub">arXiv 논문을 사람의 언어로 풀어낸 새 글을 이메일로 받아보세요. 스팸 없이, 새 글이 올라올 때만 보냅니다.</p>
+    <form id="subscribe-form" class="subscribe-form" novalidate>
+      <label class="sr-only" for="subscribe-email">이메일 주소</label>
+      <input id="subscribe-email" class="subscribe-email" type="email" name="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required maxlength="200" />
+      <button class="subscribe-btn" type="submit">구독</button>
+    </form>
+    <p id="subscribe-status" class="subscribe-status" role="status" aria-live="polite"></p>
+  </div>
+</section>
 <footer class="site-footer">arxiblog · arXiv 논문을 사람의 언어로</footer>
 <script defer src="static/app.js"></script>
 </body>
