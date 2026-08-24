@@ -18,6 +18,10 @@ interface HeadOptions {
   siteName?: string;
   /** Absolute URL of the post's Open Graph image; "" or absent omits og:image. */
   ogImage?: string;
+  /** <html lang> and og:locale (default "ko"). */
+  htmlLang?: string;
+  /** hreflang alternate links (KO/EN + x-default). */
+  alternates?: Array<{ hreflang: string; href: string }>;
 }
 
 export function safePublicUrl(base: string | undefined, relativePath = ""): string {
@@ -64,8 +68,12 @@ function head(title: string, description: string, opts: HeadOptions = {}): strin
   const canonicalUrl = safeCanonicalUrl(opts.canonicalUrl);
   const ogImage = opts.ogImage || "";
   const feedTitle = opts.siteName || "arxiblog";
+  const htmlLang = opts.htmlLang || "ko";
+  const alternates = (opts.alternates || [])
+    .map((a) => `<link rel="alternate" hreflang="${escapeHtml(a.hreflang)}" href="${escapeHtml(a.href)}">`)
+    .join("\n");
   return `<!DOCTYPE html>
-<html lang="ko">
+<html lang="${escapeHtml(htmlLang)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -75,8 +83,9 @@ function head(title: string, description: string, opts: HeadOptions = {}): strin
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:type" content="${opts.ogType || "website"}">
-<meta property="og:locale" content="ko_KR">
+<meta property="og:locale" content="${htmlLang === "en" ? "en_US" : "ko_KR"}">
 ${opts.siteName ? `<meta property="og:site_name" content="${escapeHtml(opts.siteName)}">` : ""}
+${alternates}
 ${canonicalUrl ? `<meta property="og:url" content="${escapeHtml(canonicalUrl)}">\n<link rel="canonical" href="${escapeHtml(canonicalUrl)}">` : ""}
 ${ogImage ? `<meta property="og:image" content="${escapeHtml(ogImage)}">\n<meta name="twitter:card" content="summary_large_image">` : `<meta name="twitter:card" content="summary">`}
 ${opts.noindex ? `<meta name="robots" content="noindex,nofollow">` : ""}
@@ -278,6 +287,18 @@ export function renderPostPage(opts: {
     annotations.map((a) => ({ term: a.term, kind: a.kind, explanation: a.explanation }))
   );
 
+  // hreflang alternates when a KO/EN pair exists.
+  const koHref = safePublicUrl(opts.config.project.url, `p/${encodeURIComponent(post.slug)}.html`);
+  const enHref = safePublicUrl(opts.config.project.url, `p/${encodeURIComponent(post.slug)}.en.html`);
+  const alternates =
+    (opts.hasTranslation || isEn) && koHref && enHref
+      ? [
+          { hreflang: "ko", href: koHref },
+          { hreflang: "en", href: enHref },
+          { hreflang: "x-default", href: koHref },
+        ]
+      : [];
+
   return `${head(`${displayTitle} · ${opts.config.project.name}`, description, {
     assetPrefix: "../",
     canonicalUrl,
@@ -285,6 +306,8 @@ export function renderPostPage(opts: {
     ogType: "article",
     siteName: opts.config.project.name,
     ogImage: opts.ogImage,
+    htmlLang: isEn ? "en" : "ko",
+    alternates,
   })}
 <body data-slug="${escapeHtml(post.slug)}">
 <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
@@ -364,7 +387,8 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
       const cats = splitCategories(p.categories).slice(0, 3);
       const haystack = `${p.title} ${p.subtitle} ${p.tldr} ${p.categories || ""} ${p.arxiv_id || ""}`
         .toLowerCase();
-      return `<a class="card" href="p/${encodeURIComponent(p.slug)}.html" data-search="${escapeHtml(haystack)}">
+      const cardCats = splitCategories(p.categories).map((c) => c.toLowerCase()).join(" ");
+      return `<a class="card" href="p/${encodeURIComponent(p.slug)}.html" data-search="${escapeHtml(haystack)}" data-cats="${escapeHtml(cardCats)}">
         <div class="card-meta">
           ${cats.map((c) => `<span class="cat">${escapeHtml(c)}</span>`).join("")}
           <span class="card-time">${p.reading_minutes}분</span>
@@ -381,6 +405,19 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
     <p>아직 글이 없습니다.</p>
     <p class="empty-hint"><code>arxiblog add 2605.31264</code> 처럼 arXiv 논문을 추가해 보세요.</p>
   </div>`;
+
+  // Category filter chips (top categories by frequency).
+  const catCounts = new Map<string, number>();
+  for (const p of posts) for (const c of splitCategories(p.categories)) catCounts.set(c, (catCounts.get(c) || 0) + 1);
+  const topCats = [...catCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c]) => c);
+  const catFilter =
+    topCats.length > 1
+      ? `<div class="cat-filter" id="cat-filter" role="group" aria-label="분야 필터">
+          <button class="cat-chip active" type="button" data-cat="" aria-pressed="true">전체</button>${topCats
+            .map((c) => `<button class="cat-chip" type="button" data-cat="${escapeHtml(c.toLowerCase())}" aria-pressed="false">${escapeHtml(c)}</button>`)
+            .join("")}
+        </div>`
+      : "";
 
   return `${head(config.project.name, config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로", {
     canonicalUrl,
@@ -406,6 +443,7 @@ ${siteHeader("./", config.project.name)}
       <h2 id="post-list-title" class="home-list-title">${posts.length ? `글 ${posts.length}편` : "글"}</h2>
       ${posts.length ? `<input id="post-search" class="post-search" type="search" placeholder="제목·요약·분야 검색…" aria-label="글 검색" aria-controls="cards search-status search-empty" autocomplete="off" enterkeyhint="search">` : ""}
     </div>
+    ${catFilter}
     <div class="cards" id="cards" aria-labelledby="post-list-title">
       ${posts.length ? cards : empty}
     </div>

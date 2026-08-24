@@ -490,3 +490,9 @@ body.chat-open { overflow: hidden; }
 .lang-switch a { padding: 6px 16px; color: var(--muted); }
 .lang-switch a:hover { text-decoration: none; color: var(--text); }
 .lang-switch a.active { background: var(--accent); color: #fff; }
+
+/* ── Category filter ── */
+.cat-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; }
+.cat-chip { font: inherit; font-size: .82rem; font-weight: 600; padding: 5px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); cursor: pointer; }
+.cat-chip:hover { color: var(--text); border-color: var(--accent); }
+.cat-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }

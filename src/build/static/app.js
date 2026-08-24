@@ -397,6 +397,8 @@
     const cards = Array.from(document.querySelectorAll("#cards .card"));
     const emptyMessage = document.getElementById("search-empty");
     const searchStatus = document.getElementById("search-status");
+    const catFilter = document.getElementById("cat-filter");
+    let activeCat = "";
     let announceTimer = 0;
     const normalize = function (value) {
       const text = String(value || "");
@@ -406,11 +408,14 @@
       const query = normalize(search.value.trim());
       let shown = 0;
       cards.forEach(function (card) {
-        const hit = !query || normalize(card.getAttribute("data-search")).includes(query);
+        const searchHit = !query || normalize(card.getAttribute("data-search")).includes(query);
+        const catHit =
+          !activeCat || (" " + (card.getAttribute("data-cats") || "") + " ").indexOf(" " + activeCat + " ") >= 0;
+        const hit = searchHit && catHit;
         card.hidden = !hit;
         if (hit) shown++;
       });
-      if (emptyMessage) emptyMessage.hidden = !query || shown !== 0;
+      if (emptyMessage) emptyMessage.hidden = shown !== 0;
       window.clearTimeout(announceTimer);
       announceTimer = window.setTimeout(function () {
         if (searchStatus) {
@@ -424,6 +429,19 @@
     };
     search.addEventListener("input", filterCards);
     search.addEventListener("search", filterCards);
+    if (catFilter) {
+      catFilter.addEventListener("click", function (event) {
+        const chip = event.target.closest(".cat-chip");
+        if (!chip) return;
+        activeCat = chip.getAttribute("data-cat") || "";
+        catFilter.querySelectorAll(".cat-chip").forEach(function (c) {
+          const on = c === chip;
+          c.classList.toggle("active", on);
+          c.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        filterCards();
+      });
+    }
     search.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && search.value) {
         event.preventDefault();

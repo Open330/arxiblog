@@ -502,7 +502,16 @@ async function renderSiteInto(
     `User-agent: *\nAllow: /\n${siteUrl ? `Sitemap: ${siteUrl}sitemap.xml\n` : ""}`
   );
   if (siteUrl) {
-    const urls = [siteUrl, ...posts.map((p) => new URL(`p/${encodeURIComponent(p.slug)}.html`, siteUrl).href)];
+    const urls = [
+      siteUrl,
+      ...posts.flatMap((p) => {
+        const list = [new URL(`p/${encodeURIComponent(p.slug)}.html`, siteUrl).href];
+        if ((p as { translation_en?: string }).translation_en?.trim()) {
+          list.push(new URL(`p/${encodeURIComponent(p.slug)}.en.html`, siteUrl).href);
+        }
+        return list;
+      }),
+    ];
     const sitemap =
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
       urls.map((u) => `  <url><loc>${escapeHtml(u)}</loc></url>`).join("\n") +
