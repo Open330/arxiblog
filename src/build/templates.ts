@@ -123,8 +123,16 @@ export function renderPostPage(opts: {
   related?: Array<{ slug: string; title: string; arxiv_id?: string; reading_minutes?: number }>;
   /** Absolute URL of this post's Open Graph image; "" or absent omits og:image. */
   ogImage?: string;
+  /** "en" renders the English variant (translated hero + body via `en`). */
+  lang?: "ko" | "en";
+  /** KO page: an English translation exists → show the language toggle. */
+  hasTranslation?: boolean;
+  /** EN page: the translated hero fields (body comes in via bodyHtml). */
+  en?: { title: string; subtitle: string; tldr: string; takeaways: string[]; who_should_read: string };
 }): string {
   const { post, bodyHtml, toc, annotations, related = [] } = opts;
+  const isEn = opts.lang === "en";
+  const en = opts.en;
   const takeaways = safeParseArray(post.takeaways);
   const contributions = safeParseArray(post.contributions);
   const strengths = safeParseArray(post.strengths);
@@ -134,13 +142,50 @@ export function renderPostPage(opts: {
   const keyRefs = safeParseObjectArray<{ title: string; why: string; arxiv_id?: string }>(
     (post as { key_references?: string }).key_references
   ).filter((r) => r && typeof r.title === "string" && r.title.trim());
+
+  // Display fields swap to the English translation on the EN variant page.
+  const displayTitle = isEn && en ? en.title : post.title;
+  const displaySubtitle = isEn && en ? en.subtitle : post.subtitle;
+  const displayTldr = isEn && en ? en.tldr : post.tldr;
+  const displayTakeaways = isEn && en ? en.takeaways : takeaways;
+
+  // Paper figures with plain-language explanations (KO page only for now).
+  const figures = safeParseObjectArray<{ imageUrl: string; caption: string; explanation: string }>(
+    (post as { figures?: string }).figures
+  ).filter((f) => f && typeof f.imageUrl === "string" && /^https:\/\//.test(f.imageUrl));
+  const figuresHtml =
+    !isEn && figures.length
+      ? `<section class="figures"><h2>📊 논문 속 그림</h2>${figures
+          .map(
+            (f) =>
+              `<figure class="paper-fig"><img src="${escapeHtml(f.imageUrl)}" alt="${escapeHtml(
+                f.caption.slice(0, 300)
+              )}" loading="lazy" referrerpolicy="no-referrer"><figcaption>${escapeHtml(
+                f.explanation || f.caption
+              )}</figcaption></figure>`
+          )
+          .join("")}</section>`
+      : "";
+
+  // Language toggle (KO ⇄ EN).
+  const langSwitch =
+    opts.hasTranslation || isEn
+      ? `<div class="lang-switch">
+          <a href="./${encodeURIComponent(post.slug)}.html"${!isEn ? ' class="active" aria-current="page"' : ""}>한국어</a>
+          <a href="./${encodeURIComponent(post.slug)}.en.html"${isEn ? ' class="active" aria-current="page"' : ""}>English</a>
+        </div>`
+      : "";
+
   const cats = splitCategories(post.categories);
   const arxivId = (post.arxiv_id || "").trim();
   const arxivPath = arxivId.split("/").map(encodeURIComponent).join("/");
   const absUrl = `https://arxiv.org/abs/${arxivPath}`;
   const pdfUrl = `https://arxiv.org/pdf/${arxivPath}`;
-  const description = post.subtitle || post.tldr || post.title;
-  const canonicalUrl = safePublicUrl(opts.config.project.url, `p/${encodeURIComponent(post.slug)}.html`);
+  const description = displaySubtitle || displayTldr || displayTitle;
+  const canonicalUrl = safePublicUrl(
+    opts.config.project.url,
+    `p/${encodeURIComponent(post.slug)}${isEn ? ".en" : ""}.html`
+  );
 
   const tocItems = toc
     .map((h) => `<li class="lvl${h.level}"><a href="#${escapeHtml(h.id)}">${escapeHtml(h.text)}</a></li>`)
@@ -152,11 +197,11 @@ export function renderPostPage(opts: {
     ? `<details class="toc-mobile"><summary>목차</summary><ul>${tocItems}</ul></details>`
     : "";
 
-  const tldrBox = post.tldr
-    ? `<aside class="callout tldr" aria-labelledby="tldr-title"><h2 id="tldr-title" class="callout-label">TL;DR</h2><p>${escapeHtml(post.tldr)}</p></aside>`
+  const tldrBox = displayTldr
+    ? `<aside class="callout tldr" aria-labelledby="tldr-title"><h2 id="tldr-title" class="callout-label">TL;DR</h2><p>${escapeHtml(displayTldr)}</p></aside>`
     : "";
-  const takeawaysBox = takeaways.length
-    ? `<aside class="callout takeaways" aria-labelledby="takeaways-title"><h2 id="takeaways-title" class="callout-label">한눈에 보기</h2><ul>${takeaways
+  const takeawaysBox = displayTakeaways.length
+    ? `<aside class="callout takeaways" aria-labelledby="takeaways-title"><h2 id="takeaways-title" class="callout-label">${isEn ? "At a glance" : "한눈에 보기"}</h2><ul>${displayTakeaways
         .map((t) => `<li>${escapeHtml(t)}</li>`)
         .join("")}</ul></aside>`
     : "";
@@ -233,7 +278,7 @@ export function renderPostPage(opts: {
     annotations.map((a) => ({ term: a.term, kind: a.kind, explanation: a.explanation }))
   );
 
-  return `${head(`${post.title} · ${opts.config.project.name}`, description, {
+  return `${head(`${displayTitle} · ${opts.config.project.name}`, description, {
     assetPrefix: "../",
     canonicalUrl,
     mathContent: opts.hasMath,
@@ -252,8 +297,9 @@ ${siteHeader("../", opts.config.project.name)}
       <span>${post.reading_minutes}분 읽기</span>
       <span class="level level-${escapeHtml(post.level)}">${post.level === "intermediate" ? "중급" : "입문"}</span>
     </div>
-    <h1 id="post-title" class="post-title">${escapeHtml(post.title)}</h1>
-    ${post.subtitle ? `<p class="post-subtitle">${escapeHtml(post.subtitle)}</p>` : ""}
+    <h1 id="post-title" class="post-title">${escapeHtml(displayTitle)}</h1>
+    ${displaySubtitle ? `<p class="post-subtitle">${escapeHtml(displaySubtitle)}</p>` : ""}
+    ${langSwitch}
 
     <aside class="paper-card" aria-label="원문 논문 정보">
       <span class="paper-card-tag">원문 논문</span>
@@ -266,17 +312,18 @@ ${siteHeader("../", opts.config.project.name)}
 
     ${tldrBox}
     ${takeawaysBox}
-    ${reviewCard}
-    ${chips}
+    ${isEn ? "" : reviewCard}
+    ${isEn ? "" : chips}
     ${tocMobile}
 
     <div class="post-body">
       ${bodyHtml}
     </div>
 
+    ${figuresHtml}
     ${glossary}
-    ${citationsHtml}
-    ${relatedHtml}
+    ${isEn ? "" : citationsHtml}
+    ${isEn ? "" : relatedHtml}
 
     <footer class="post-footer">
       이 글은 <a href="${escapeHtml(absUrl)}" target="_blank" rel="noopener noreferrer" aria-label="arXiv 원문 보기(새 탭)">arXiv:${escapeHtml(arxivId)}</a> 논문을

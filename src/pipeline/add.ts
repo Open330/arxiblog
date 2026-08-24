@@ -3,6 +3,9 @@ import { getActivePersona, hasLlmKey } from "../config";
 import type { Store } from "../store";
 import { LLMClient, type UsageStats } from "../llm-client";
 import { parseArxivId, fetchArxivMeta, fetchArxivFullText } from "../ingest/arxiv";
+import { fetchArxivFigures } from "../ingest/figures";
+import { explainFigures, type ExplainedFigure } from "./figures";
+import { translatePostToEnglish } from "./translate";
 import { transformToBlog, postSlug, estimateReadingMinutes } from "./transform";
 
 export interface AddResult {
@@ -66,6 +69,34 @@ export async function addPaper(
 
   const slug = postSlug(meta, blog.title);
   const minutes = estimateReadingMinutes(blog.content);
+
+  // Optional features — best-effort; a failure never blocks publishing the post.
+  let figures: ExplainedFigure[] = [];
+  if (config.features?.figures !== false) {
+    try {
+      const figs = await fetchArxivFigures(meta.arxivId);
+      if (figs.length) {
+        progress("figures", String(figs.length));
+        figures = await explainFigures(llm, { title: meta.title }, figs);
+      }
+    } catch { /* skip figures */ }
+  }
+  let translationEn = "";
+  if (config.features?.translate_en !== false) {
+    try {
+      progress("translate", "en");
+      const en = await translatePostToEnglish(llm, {
+        title: blog.title,
+        subtitle: blog.subtitle,
+        tldr: blog.tldr,
+        takeaways: blog.takeaways,
+        content: blog.content,
+        who_should_read: blog.who_should_read,
+      });
+      translationEn = JSON.stringify(en);
+    } catch { /* skip EN */ }
+  }
+
   const post = store.upsertPost({
     paper_id: paper.id,
     slug,
@@ -84,6 +115,8 @@ export async function addPaper(
     who_should_read: blog.who_should_read,
     suggested_questions: blog.suggested_questions,
     key_references: blog.key_references,
+    figures,
+    translation_en: translationEn,
   });
   store.replaceAnnotations(post.id, blog.annotations);
 

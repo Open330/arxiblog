@@ -50,6 +50,8 @@ function post(slug: string, content: string): Post {
     who_should_read: "",
     suggested_questions: "[]",
     key_references: "[]",
+    figures: "[]",
+    translation_en: "",
     paper_title: slug,
     arxiv_id: `2601.${String(slug.length).padStart(5, "0")}`,
     categories: "cs.SE",

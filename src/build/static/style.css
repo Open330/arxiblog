@@ -478,3 +478,15 @@ body.chat-open { overflow: hidden; }
 .ref-title { font-weight: 600; }
 .ref-why { color: var(--muted); font-size: .9rem; line-height: 1.5; }
 .ref-link { align-self: flex-start; font-family: ui-monospace, monospace; font-size: .8rem; }
+
+/* ── Paper figures ── */
+.figures { margin: 44px 0 0; }
+.figures h2 { font-size: 1.25rem; margin: 0 0 16px; }
+.paper-fig { margin: 0 0 24px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.paper-fig img { display: block; width: 100%; height: auto; background: #ffffff; }
+.paper-fig figcaption { padding: 12px 16px; color: var(--muted); font-size: .9rem; line-height: 1.62; }
+/* ── Language switch ── */
+.lang-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 0 0 26px; font-size: .84rem; font-weight: 600; }
+.lang-switch a { padding: 6px 16px; color: var(--muted); }
+.lang-switch a:hover { text-decoration: none; color: var(--text); }
+.lang-switch a.active { background: var(--accent); color: #fff; }

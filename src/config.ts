@@ -79,6 +79,11 @@ export interface ArxiblogConfig {
   /** Default reading level for new posts: "beginner" | "intermediate" */
   default_level?: string;
   chat?: ChatConfig;
+  /** Optional generation features (default on). Each adds LLM cost per paper. */
+  features?: {
+    figures?: boolean; // fetch + explain paper figures
+    translate_en?: boolean; // generate an English version of each post
+  };
 }
 
 export const DEFAULT_CHAT: Required<ChatConfig> = {

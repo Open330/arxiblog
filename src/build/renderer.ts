@@ -419,6 +419,8 @@ async function renderSiteInto(
 
     const ogPath = ogPaths.get(post.slug) ?? "";
     const ogImage = ogBase && ogPath ? `${ogBase}${ogPath}` : "";
+    const rawEn = (post as { translation_en?: string }).translation_en;
+    const hasTranslation = !!(rawEn && rawEn.trim());
 
     const html = renderPostPage({
       config,
@@ -430,8 +432,31 @@ async function renderSiteInto(
       hasMermaid: renderedBody.hasMermaid,
       related,
       ogImage,
+      hasTranslation,
     });
     await Bun.write(join(postsDir, `${post.slug}.html`), html);
+
+    // English variant page — reuses the same annotations (KO [[term]] markers are
+    // preserved in the translation). Skipped if the stored JSON is malformed.
+    if (hasTranslation) {
+      try {
+        const enData = JSON.parse(rawEn!) as {
+          title: string; subtitle: string; tldr: string;
+          takeaways: string[]; content: string; who_should_read: string;
+        };
+        if (enData?.content?.trim()) {
+          const enToc = generateToc(enData.content);
+          const enRendered = await renderPostBodyWithAssets(enData.content, annotations);
+          const enBody = injectHeadingIds(enRendered.html, enToc);
+          const enHtml = renderPostPage({
+            config, post, bodyHtml: enBody, toc: enToc, annotations,
+            hasMath: enRendered.hasMath, hasMermaid: enRendered.hasMermaid,
+            ogImage, lang: "en", en: enData, hasTranslation: true,
+          });
+          await Bun.write(join(postsDir, `${post.slug}.en.html`), enHtml);
+        }
+      } catch { /* skip EN page */ }
+    }
   }
 
   copyVendorAssets(staticDir, { math: siteHasMath, mermaid: siteHasMermaid });
