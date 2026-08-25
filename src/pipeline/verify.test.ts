@@ -77,6 +77,20 @@ describe("applyVerification", () => {
     expect(out).toMatchObject({ tldr: input.tldr, takeaways: input.takeaways });
   });
 
+  test("rejects annotation corrections that are meta-disclaimers, not definitions", () => {
+    const out = applyVerification(baseInput(), {
+      claims: [],
+      annotations: [
+        { term: "Hessian", verdict: "fix", corrected: "제시된 원문 근거에는 해당 용어의 정의가 포함되어 있지 않습니다." },
+        { term: "Adam", verdict: "fix", corrected: "적응적 학습률을 쓰는 옵티마이저." }, // a real definition — allowed
+      ],
+    });
+    // the disclaimer is skipped, the genuine definition is applied
+    expect(out.annotations.find((a) => a.term === "Hessian")!.explanation).toBe("1차 미분 행렬.");
+    expect(out.annotations.find((a) => a.term === "Adam")!.explanation).toBe("적응적 학습률을 쓰는 옵티마이저.");
+    expect(out.changes).toBe(1);
+  });
+
   test("never mutates the input object", () => {
     const input = baseInput();
     applyVerification(input, { claims: [{ id: "tldr", verdict: "fix", corrected: "changed" }], annotations: [] });

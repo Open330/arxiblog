@@ -91,6 +91,11 @@ export function parseVerdicts(raw: string): Verdicts {
 
 const FIX = /fix|overstat|unsupport|correct|wrong|과장|틀|수정|오류/i;
 
+// A "correction" that is really a note about the source ("the paper doesn't
+// define this") — valid as an annotation only if it's a definition, so we reject
+// these for the glossary rather than let a disclaimer replace a good definition.
+const META_DISCLAIMER = /원문|근거|제시된|주어진 자료|언급된|포함되어\s*있지|정의나 내용|찾을 수 없|나와 있지/;
+
 /** True when a verdict calls for replacing the text with a usable correction. */
 function needsFix(verdict: string, corrected: string | undefined): corrected is string {
   return FIX.test(verdict) && typeof corrected === "string" && corrected.trim().length > 0;
@@ -137,6 +142,9 @@ export function applyVerification(input: VerifyInput, verdicts: Verdicts): Verif
   for (const a of verdicts.annotations) {
     if (!needsFix(a.verdict, a.corrected)) continue;
     const corrected = a.corrected.trim();
+    // A glossary entry must stay a reader-facing definition; never let a
+    // "the source doesn't mention this" disclaimer overwrite a good one.
+    if (META_DISCLAIMER.test(corrected)) continue;
     const target = out.annotations.find((x) => x.term.toLowerCase() === a.term.toLowerCase());
     if (target && corrected !== target.explanation) {
       target.explanation = corrected;
@@ -159,7 +167,7 @@ function buildPrompt(
 - 오직 [원문 근거]에 나온 내용으로만 판단합니다. 근거로 참/거짓을 확정할 수 없으면 반드시 "ok"로 둡니다(모르면 건드리지 않음).
 - 명백히 원문과 다르거나(수치·결과·주체가 틀림), 원문보다 과장된 주장만 "fix"로 표시하고, corrected에 원문에 맞게 고친(과장을 덜어낸) 한국어 문장을 넣습니다.
 - corrected는 원래 문장의 형식·길이를 유지하고, 원문에 없는 새 수치나 사실을 만들지 않습니다.
-- 용어 설명(annotations)이 원문의 용례와 어긋나면 "fix"로 표시하고 corrected에 바로잡은 설명을 넣습니다.
+- 용어 설명(annotations)은 독자를 위한 사전 정의입니다. 그 용어가 원문에 직접 안 나와도 일반적으로 올바른 설명이면 반드시 "ok"로 둡니다. 설명이 원문의 용례와 명백히 어긋날 때만 "fix"로 표시하고, corrected에는 올바른 '정의'만 넣습니다. "원문/근거에 없다" 같은 메타 설명은 절대 쓰지 않습니다.
 - 출력은 아래 JSON 형식만. 설명·군더더기 금지.`;
 
   const claimsBlock = claims.map((c) => `${c.id} | ${c.text}`).join("\n");
