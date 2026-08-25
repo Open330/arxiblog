@@ -245,6 +245,69 @@
     return item;
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function inlineMd(escaped) {
+    var codes = [];
+    var s = escaped.replace(/`([^`]+)`/g, function (_m, c) { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    s = s.replace(/\u0000(\d+)\u0000/g, function (_m, i) { return "<code>" + codes[i] + "</code>"; });
+    return s;
+  }
+
+  // Minimal, safe markdown: escapes first, then renders bold/italic/code and
+  // bullet/numbered lists. Chat answers arrive as markdown but were shown raw.
+  function renderMarkdown(src) {
+    var lines = String(src == null ? "" : src).replace(/\r/g, "").split("\n");
+    var html = "", listType = null, para = [];
+    function inline(x) { return inlineMd(escapeHtml(x)); }
+    function flushPara() { if (para.length) { html += "<p>" + para.join("<br>") + "</p>"; para = []; } }
+    function closeList() { if (listType) { html += "</" + listType + ">"; listType = null; } }
+    for (var idx = 0; idx < lines.length; idx++) {
+      var line = lines[idx].trim();
+      if (!line) { flushPara(); closeList(); continue; }
+      var h = line.match(/^#{1,6}\s+(.*)$/);
+      if (h) { flushPara(); closeList(); html += '<p class="chat-h"><strong>' + inline(h[1]) + "</strong></p>"; continue; }
+      var ul = line.match(/^[-*\u2022]\s+(.*)$/);
+      var ol = line.match(/^\d+[.)]\s+(.*)$/);
+      if (ul) { flushPara(); if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; } html += "<li>" + inline(ul[1]) + "</li>"; }
+      else if (ol) { flushPara(); if (listType !== "ol") { closeList(); html += "<ol>"; listType = "ol"; } html += "<li>" + inline(ol[1]) + "</li>"; }
+      else { closeList(); para.push(inline(line)); }
+    }
+    flushPara(); closeList();
+    return html;
+  }
+
+  // Turn "근거 N" (incl. "근거 1, 4") into buttons that reveal the matching source.
+  function linkifyCites(html) {
+    return html.replace(/근거\s*(\d+(?:\s*,\s*\d+)*)/g, function (_m, nums) {
+      return nums.split(/\s*,\s*/).map(function (n) {
+        return '<button type="button" class="cite-ref" data-ref="' + n + '">근거 ' + n + "</button>";
+      }).join(", ");
+    });
+  }
+
+  function wireCites(bubble) {
+    bubble.querySelectorAll(".cite-ref").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var n = parseInt(btn.getAttribute("data-ref"), 10);
+        var details = bubble.querySelector(".chat-sources");
+        if (!details || !n) return;
+        details.open = true;
+        var target = details.querySelectorAll(".chat-source")[n - 1];
+        if (!target) return;
+        target.scrollIntoView({ block: "nearest" });
+        target.classList.add("cite-flash");
+        setTimeout(function () { target.classList.remove("cite-flash"); }, 1200);
+      });
+    });
+  }
+
   function renderSources(bubble, sources) {
     if (!bubble || !Array.isArray(sources) || sources.length === 0) return;
     const details = document.createElement("details");
@@ -252,10 +315,11 @@
     const summary = document.createElement("summary");
     summary.textContent = "원문 근거 " + sources.length + "곳";
     details.appendChild(summary);
-    sources.forEach(function (source) {
+    sources.forEach(function (source, index) {
       if (!source || typeof source.text !== "string") return;
       const quote = document.createElement("blockquote");
       quote.className = "chat-source";
+      quote.setAttribute("data-ref", String(index + 1));
       if (source.section) {
         const cite = document.createElement("cite");
         cite.className = "chat-source-section";
@@ -344,8 +408,12 @@
       }
       if (pending) {
         pending.classList.remove("chat-typing");
-        pending.textContent = answer;
+        var hasSources = !!(data && Array.isArray(data.sources) && data.sources.length);
+        var rendered = renderMarkdown(answer);
+        pending.innerHTML = hasSources ? linkifyCites(rendered) : rendered;
+        pending.classList.add("md");
         renderSources(pending, data && data.sources);
+        if (hasSources) wireCites(pending);
       }
       history.push({ role: "assistant", content: answer });
     } catch (_err) {

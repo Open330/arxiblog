@@ -566,3 +566,42 @@ body.chat-open { overflow: hidden; }
   font-size: .74rem; letter-spacing: .01em; color: var(--muted);
 }
 .chat-source p { margin: 0; overflow-wrap: anywhere; }
+
+/* ── Chat: rendered markdown ── */
+.chat-msg.md { white-space: normal; }
+.chat-msg.md p { margin: .5em 0; }
+.chat-msg.md p:first-child { margin-top: 0; }
+.chat-msg.md p:last-child { margin-bottom: 0; }
+.chat-msg.md ul, .chat-msg.md ol { margin: .45em 0; padding-left: 1.25em; }
+.chat-msg.md li { margin: .2em 0; }
+.chat-msg.md li::marker { color: var(--muted); }
+.chat-msg.md strong { font-weight: 700; }
+.chat-msg.md em { font-style: italic; }
+.chat-msg.md code {
+  background: var(--code-bg); padding: .05em .35em; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em;
+}
+
+/* ── Chat: interactive [근거 N] citations ── */
+.cite-ref {
+  display: inline; background: var(--accent-weak); color: var(--accent);
+  border: 0; border-radius: 5px; padding: 1px 6px; margin: 0 1px;
+  font: inherit; font-size: .82em; font-weight: 600; line-height: 1.3; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.cite-ref:hover { background: var(--accent); color: var(--accent-contrast); }
+.cite-ref:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+@keyframes citeflash { 0%, 100% { background: var(--bg); } 25% { background: var(--accent-weak); } }
+.chat-source.cite-flash { animation: citeflash 1.2s ease; }
+
+/* ── Post: source-verified trust badge ── */
+.verified-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 42%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-radius: 999px; padding: 1px 9px; font-size: .78rem; font-weight: 600;
+  cursor: default;
+}
+.chat-msg.md .chat-h { margin: .6em 0 .25em; font-size: .98em; }
+.chat-msg.md .chat-h:first-child { margin-top: 0; }

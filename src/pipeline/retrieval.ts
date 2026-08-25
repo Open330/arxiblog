@@ -96,8 +96,17 @@ export function tokenize(input: string): string[] {
   return out;
 }
 
-const NORMALIZE_WS = /[ \t\f\v]+/g;
 const BLANK_LINES = /\n[ \t]*\n+/;
+
+/** Clean a passage for storage/display: rejoin PDF line-break hyphenation, then
+ * collapse all whitespace (including the newlines PDF extraction litters mid-
+ * sentence) so snippets read as prose and tokens aren't split across lines. */
+function normalizePassage(s: string): string {
+  return s
+    .replace(/([A-Za-z])-\n([A-Za-z])/g, "$1$2") // "converg-\nes" -> "converges"
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** True for lines that look like a section heading (e.g. "3.2 Method", "Abstract"). */
 function detectHeading(line: string): string | undefined {
@@ -126,7 +135,7 @@ export function chunkText(raw: string, chunkChars: number = DEFAULT_CHUNK): Pass
   let buffer = "";
 
   const flush = () => {
-    const t = buffer.trim().replace(NORMALIZE_WS, " ");
+    const t = normalizePassage(buffer);
     if (t.length >= 2) passages.push({ text: t, section: currentSection, index: passages.length });
     buffer = "";
   };

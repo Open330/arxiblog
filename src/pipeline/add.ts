@@ -71,6 +71,7 @@ export async function addPaper(
   // Source-grounded fact-check — best-effort. Corrects overstated/unsupported
   // structured claims and re-grounds annotations against the paper; a failure
   // never blocks publishing.
+  let reviewedAt = "";
   if (config.features?.factcheck !== false) {
     try {
       const verified = await verifyAndGround(
@@ -92,6 +93,7 @@ export async function addPaper(
       blog.strengths = verified.strengths;
       blog.limitations = verified.limitations;
       blog.annotations = verified.annotations;
+      reviewedAt = new Date().toISOString();
       if (verified.changes) progress("factcheck", String(verified.changes));
     } catch { /* skip fact-check */ }
   }
@@ -146,6 +148,7 @@ export async function addPaper(
     key_references: blog.key_references,
     figures,
     translation_en: translationEn,
+    reviewed_at: reviewedAt,
   });
   store.replaceAnnotations(post.id, blog.annotations);
 

@@ -320,6 +320,7 @@ ${siteHeader("../", opts.config.project.name)}
       <span>${post.reading_minutes}분 읽기</span>
       <span class="level level-${escapeHtml(post.level)}">${post.level === "intermediate" ? "중급" : "입문"}</span>
       <span id="post-stats" class="post-stats" aria-live="polite"></span>
+      ${post.reviewed_at ? '<span class="verified-badge" title="이 글의 핵심 주장과 용어 설명을 arXiv 원문과 대조해 검증했습니다.">✓ 원문 대조 검증</span>' : ""}
     </div>
     <h1 id="post-title" class="post-title">${escapeHtml(displayTitle)}</h1>
     ${displaySubtitle ? `<p class="post-subtitle">${escapeHtml(displaySubtitle)}</p>` : ""}

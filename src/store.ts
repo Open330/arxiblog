@@ -53,6 +53,7 @@ export interface Post {
   key_references: string; // JSON array of {title, why, arxiv_id?}
   figures: string; // JSON array of {imageUrl, caption, explanation}
   translation_en: string; // JSON of the English TranslatedPost, or ""
+  reviewed_at: string; // ISO timestamp when the fact-check pass ran, or ""
   // joined
   paper_title?: string;
   arxiv_id?: string;
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS posts (
   key_references TEXT DEFAULT '[]',
   figures TEXT DEFAULT '[]',
   translation_en TEXT DEFAULT '',
+  reviewed_at TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS annotations (
@@ -168,6 +170,7 @@ export class Store {
       key_references: "TEXT DEFAULT '[]'",
       figures: "TEXT DEFAULT '[]'",
       translation_en: "TEXT DEFAULT ''",
+      reviewed_at: "TEXT DEFAULT ''",
     };
     for (const [name, type] of Object.entries(newCols)) {
       if (!existing.has(name)) this.db.exec(`ALTER TABLE posts ADD COLUMN ${name} ${type}`);
@@ -240,6 +243,7 @@ export class Store {
     key_references?: Array<{ title: string; why: string; arxiv_id?: string }>;
     figures?: Array<{ imageUrl: string; caption: string; explanation: string }>;
     translation_en?: string;
+    reviewed_at?: string;
   }): Post {
     const save = this.db.transaction((input: typeof p): Post => {
       // A slug collision must never move another paper's post. This can occur
@@ -260,8 +264,8 @@ export class Store {
       this.db.prepare(
         `INSERT INTO posts (paper_id, slug, title, subtitle, tldr, takeaways, level, reading_minutes, content, persona,
             contributions, strengths, limitations, prerequisites, who_should_read, suggested_questions, key_references,
-            figures, translation_en)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            figures, translation_en, reviewed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(slug) DO UPDATE SET
            paper_id=excluded.paper_id, title=excluded.title, subtitle=excluded.subtitle,
            tldr=excluded.tldr, takeaways=excluded.takeaways, level=excluded.level,
@@ -269,7 +273,7 @@ export class Store {
            contributions=excluded.contributions, strengths=excluded.strengths, limitations=excluded.limitations,
            prerequisites=excluded.prerequisites, who_should_read=excluded.who_should_read,
            suggested_questions=excluded.suggested_questions, key_references=excluded.key_references,
-           figures=excluded.figures, translation_en=excluded.translation_en`
+           figures=excluded.figures, translation_en=excluded.translation_en, reviewed_at=excluded.reviewed_at`
       ).run(
         input.paper_id,
         input.slug,
@@ -289,7 +293,8 @@ export class Store {
         JSON.stringify(input.suggested_questions ?? []),
         JSON.stringify(input.key_references ?? []),
         JSON.stringify(input.figures ?? []),
-        input.translation_en ?? ""
+        input.translation_en ?? "",
+        input.reviewed_at ?? ""
       );
       return this.db.prepare("SELECT * FROM posts WHERE slug=?").get(input.slug) as Post;
     });
