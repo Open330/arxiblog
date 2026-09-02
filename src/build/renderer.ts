@@ -384,6 +384,23 @@ async function renderSiteInto(
   // Precompute each post's category Set once (avoids O(n^2) re-splitting in the loop).
   const catSets = new Map<string, Set<string>>();
   for (const p of posts) catSets.set(p.slug, new Set(splitCategories(p.categories)));
+  // Relatedness signals, precomputed once. A shared category or word is only
+  // meaningful when it is rare across the corpus (everyone is cs.LG), so both
+  // categories and title/subtitle/TL;DR tokens are weighted by inverse document
+  // frequency. Related = IDF-weighted shared categories + shared tokens.
+  const catDf = new Map<string, number>();
+  for (const s of catSets.values()) for (const c of s) catDf.set(c, (catDf.get(c) || 0) + 1);
+  const profileOf = (p: { title?: string; subtitle?: string; tldr?: string }): Set<string> => {
+    const text = `${p.title || ""} ${p.subtitle || ""} ${p.tldr || ""}`.toLowerCase();
+    return new Set(text.match(/[a-z][a-z0-9]{2,}|[가-힣]{2,}/g) || []);
+  };
+  const profiles = new Map<string, Set<string>>();
+  for (const p of posts) profiles.set(p.slug, profileOf(p));
+  const tokDf = new Map<string, number>();
+  for (const s of profiles.values()) for (const tk of s) tokDf.set(tk, (tokDf.get(tk) || 0) + 1);
+  const nDocs = posts.length;
+  const catIdf = (c: string) => Math.log((nDocs + 1) / ((catDf.get(c) || 0) + 0.5));
+  const tokIdf = (tk: string) => Math.log((nDocs + 1) / ((tokDf.get(tk) || 0) + 0.5));
 
   // Open Graph cards live at /og/<slug>.(png|svg). og:image needs an absolute
   // URL, so it is only emitted when a public site URL is configured.
@@ -402,14 +419,21 @@ async function renderSiteInto(
     siteHasMath ||= renderedBody.hasMath;
     siteHasMermaid ||= renderedBody.hasMermaid;
 
-    // Related: other posts sharing the most arXiv categories (fallback: most recent).
+    // Related: IDF-weighted shared categories + shared title/TL;DR tokens, so the
+    // closest topics rank first and every post surfaces up to three neighbours
+    // even when categories don't overlap (a shared cs.LG counts for almost nothing).
     const mine = catSets.get(post.slug)!;
+    const myTokens = profiles.get(post.slug)!;
     const related = posts
       .filter((p) => p.slug !== post.slug)
-      .map((p) => ({ p, overlap: [...catSets.get(p.slug)!].filter((c) => mine.has(c)).length }))
-      .sort((a, b) => b.overlap - a.overlap)
+      .map((p) => {
+        let score = 0;
+        for (const c of catSets.get(p.slug)!) if (mine.has(c)) score += catIdf(c);
+        for (const tk of profiles.get(p.slug)!) if (myTokens.has(tk)) score += tokIdf(tk);
+        return { p, score };
+      })
+      .sort((a, b) => b.score - a.score)
       .slice(0, 3)
-      .filter((x) => x.overlap > 0 || posts.length <= 4)
       .map((x) => ({
         slug: x.p.slug,
         title: x.p.title,
