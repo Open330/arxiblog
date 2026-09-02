@@ -370,6 +370,10 @@
     messageElement.appendChild(retry);
   }
 
+  // Whether SSE streaming works through the current proxy; flipped off on the
+  // first streaming 5xx (e.g. a Cloudflare tunnel that rejects streamed responses).
+  var sseSupported = true;
+
   // Render a completed answer bubble: markdown + interactive citations + sources.
   function finalizeAnswer(bubble, answer, sources) {
     if (!bubble) return;
@@ -394,11 +398,25 @@
 
     try {
       const endpoint = new URL("../api/chat", window.location.href);
-      const response = await fetch(endpoint, {
+      var reqBody = JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) });
+      var askedSse = sseSupported;
+      var response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
+        headers: askedSse
+          ? { "Content-Type": "application/json", "Accept": "text/event-stream" }
+          : { "Content-Type": "application/json" },
+        body: reqBody,
       });
+      // A proxy that can't do streaming answers the SSE request with a 5xx before
+      // any bytes. Retry once as a plain buffered request and remember for the session.
+      if (!response.ok && askedSse && response.status >= 500) {
+        sseSupported = false;
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: reqBody,
+        });
+      }
       var ctype = response.headers.get("content-type") || "";
       if (!response.ok) {
         removeTurn(userTurn);

@@ -503,6 +503,19 @@ async function handleChat(
     const llm = new LLMClient(config.llm);
     const prepared = prepareAnswer(store, post, question, history);
 
+    // Stream only when the client explicitly accepts SSE. Some proxies (e.g.
+    // Cloudflare tunnels) reject a streaming response with a 5xx, so the browser
+    // falls back to a plain request; serve that as one buffered JSON answer.
+    const wantsStream = (req.headers.get("accept") || "").includes("text/event-stream");
+    if (!wantsStream) {
+      const answer = (await llm.chatComplete(prepared.system, prepared.user, 1024)).trim();
+      if (!answer) { settle(false); return Response.json({ error: "비어 있는 답변을 받았어요." }, { status: 502 }); }
+      settle(true);
+      const u = llm.getUsageStats();
+      store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
+      return Response.json({ answer, sources: prepared.sources });
+    }
+
     // Stream the answer over SSE: sources first (already known), then tokens, then
     // done. The reader sees text appear as it is generated instead of a long wait.
     const encoder = new TextEncoder();
