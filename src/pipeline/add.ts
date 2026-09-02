@@ -72,6 +72,7 @@ export async function addPaper(
   // structured claims and re-grounds annotations against the paper; a failure
   // never blocks publishing.
   let reviewedAt = "";
+  let verifyNotes = "";
   if (config.features?.factcheck !== false) {
     try {
       const verified = await verifyAndGround(
@@ -94,6 +95,7 @@ export async function addPaper(
       blog.limitations = verified.limitations;
       blog.annotations = verified.annotations;
       reviewedAt = new Date().toISOString();
+      verifyNotes = JSON.stringify(verified.report);
       if (verified.changes) progress("factcheck", String(verified.changes));
     } catch { /* skip fact-check */ }
   }
@@ -149,6 +151,7 @@ export async function addPaper(
     figures,
     translation_en: translationEn,
     reviewed_at: reviewedAt,
+    verify_notes: verifyNotes,
   });
   store.replaceAnnotations(post.id, blog.annotations);
 

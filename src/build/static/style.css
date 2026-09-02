@@ -621,3 +621,77 @@ body.chat-open { overflow: hidden; }
 }
 @keyframes chatcaret { 0%, 50% { opacity: 0.55; } 50.01%, 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .chat-msg.streaming::after { animation: none; } }
+
+/* ── 검증 노트: what the source-grounded fact-check verified/adjusted ── */
+.verify-note {
+  margin: 18px 0 8px;
+  border: 1px solid var(--verify-border, #cfe8d8);
+  background: var(--verify-bg, #f2faf5);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.verify-note > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.92rem;
+}
+.verify-note > summary::-webkit-details-marker { display: none; }
+.verify-note > summary::after {
+  content: "▾";
+  margin-left: auto;
+  opacity: 0.5;
+  transition: transform 0.15s ease;
+}
+.verify-note[open] > summary::after { transform: rotate(180deg); }
+.verify-note-badge {
+  font-weight: 700;
+  color: var(--verify-fg, #1a7f4b);
+  white-space: nowrap;
+}
+.verify-note-summary { color: var(--verify-muted, #4a6b58); }
+.verify-note-body {
+  padding: 4px 16px 16px;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+.verify-note-body > p { margin: 0 0 12px; color: var(--verify-muted, #4a6b58); }
+.verify-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.verify-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--verify-item-bg, #ffffff);
+  border: 1px solid var(--verify-border, #cfe8d8);
+  border-radius: 9px;
+}
+.verify-item-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--verify-fg, #1a7f4b);
+}
+.verify-before {
+  text-decoration: line-through;
+  color: var(--verify-strike, #9aa6a0);
+  text-decoration-color: var(--verify-strike, #9aa6a0);
+}
+.verify-after { color: var(--text, #1a1a1a); }
+.verify-after::before { content: "→ "; color: var(--verify-fg, #1a7f4b); font-weight: 700; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .verify-note { --verify-border: #244b39; --verify-bg: #12241b; }
+  :root:not([data-theme="light"]) .verify-note-badge,
+  :root:not([data-theme="light"]) .verify-item-label,
+  :root:not([data-theme="light"]) .verify-after::before { color: #5fd39a; }
+  :root:not([data-theme="light"]) .verify-note-summary,
+  :root:not([data-theme="light"]) .verify-note-body > p { color: #9fc2ad; }
+  :root:not([data-theme="light"]) .verify-item { --verify-item-bg: #0f1c15; --verify-border: #244b39; }
+  :root:not([data-theme="light"]) .verify-before { color: #6b7d73; text-decoration-color: #6b7d73; }
+  :root:not([data-theme="light"]) .verify-after { color: #e8ebe9; }
+}

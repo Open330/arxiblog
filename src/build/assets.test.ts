@@ -53,6 +53,7 @@ function post(slug: string, content: string): Post {
     figures: "[]",
     translation_en: "",
     reviewed_at: "2026-01-01T00:00:00.000Z",
+  verify_notes: "",
     paper_title: slug,
     arxiv_id: `2601.${String(slug.length).padStart(5, "0")}`,
     categories: "cs.SE",

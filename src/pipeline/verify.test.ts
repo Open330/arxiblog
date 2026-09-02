@@ -43,6 +43,31 @@ describe("applyVerification", () => {
     expect(out.changes).toBe(1);
   });
 
+  test("records a reader-facing report: checked count + before/after adjustments", () => {
+    const input = baseInput();
+    const out = applyVerification(input, {
+      claims: [{ id: "tldr", verdict: "fix", corrected: "이 모델은 정확도 82%를 달성했습니다." }],
+      annotations: [{ term: "Hessian", verdict: "fix", corrected: "2차 미분(곡률) 행렬." }],
+    });
+    // Every claim + annotation is counted as checked, not just the fixed ones.
+    const claimCount = 1 + input.takeaways.length + input.contributions.length + input.strengths.length + input.limitations.length;
+    expect(out.report.checked).toBe(claimCount + input.annotations.length);
+    expect(out.report.adjustments).toEqual([
+      { label: "핵심 요약", before: input.tldr, after: "이 모델은 정확도 82%를 달성했습니다." },
+      { label: "용어 설명: Hessian", before: "1차 미분 행렬.", after: "2차 미분(곡률) 행렬." },
+    ]);
+    expect(out.changes).toBe(out.report.adjustments.length);
+  });
+
+  test("a meta-disclaimer that is skipped never appears in the report", () => {
+    const out = applyVerification(baseInput(), {
+      claims: [],
+      annotations: [{ term: "Hessian", verdict: "fix", corrected: "제시된 원문 근거에는 정의가 없습니다." }],
+    });
+    expect(out.report.adjustments).toEqual([]);
+    expect(out.report.checked).toBeGreaterThan(0);
+  });
+
   test("fixes an indexed array claim", () => {
     const out = applyVerification(baseInput(), {
       claims: [{ id: "takeaway:0", verdict: "overstated", corrected: "속도가 2배 빨라졌다." }],

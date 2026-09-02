@@ -206,6 +206,38 @@ export function renderPostPage(opts: {
     ? `<details class="toc-mobile"><summary>목차</summary><ul>${tocItems}</ul></details>`
     : "";
 
+  // Transparency: what the source-grounded fact-check checked and adjusted.
+  const verifyBox = ((): string => {
+    if (isEn || !post.reviewed_at || !post.verify_notes) return "";
+    let report: { checked?: number; adjustments?: Array<{ label?: string; before?: string; after?: string }> };
+    try { report = JSON.parse(post.verify_notes); } catch { return ""; }
+    const checked = Number(report.checked) || 0;
+    if (checked === 0) return "";
+    const adj = Array.isArray(report.adjustments) ? report.adjustments : [];
+    const summaryText = adj.length
+      ? `핵심 주장 ${checked}개를 원문과 대조 · ${adj.length}곳을 바로잡음`
+      : `핵심 주장 ${checked}개가 모두 원문과 일치`;
+    const intro = adj.length
+      ? `AI가 작성한 핵심 주장과 용어 설명을 arXiv 원문과 대조했고, 아래 ${adj.length}곳을 원문에 더 정확하도록 다듬었습니다.`
+      : `AI가 작성한 핵심 주장과 용어 설명을 arXiv 원문과 대조했으며, 원문과 어긋나는 내용은 없었습니다.`;
+    const items = adj
+      .map(
+        (a) =>
+          `<li class="verify-item"><span class="verify-item-label">${escapeHtml(a.label || "주장")}</span>` +
+          `<del class="verify-before">${escapeHtml(a.before || "")}</del>` +
+          `<ins class="verify-after">${escapeHtml(a.after || "")}</ins></li>`
+      )
+      .join("");
+    return (
+      `<details class="verify-note"><summary>` +
+      `<span class="verify-note-badge">✓ 원문 대조 검증</span>` +
+      `<span class="verify-note-summary">${escapeHtml(summaryText)}</span></summary>` +
+      `<div class="verify-note-body"><p>${escapeHtml(intro)}</p>` +
+      (items ? `<ul class="verify-list">${items}</ul>` : "") +
+      `</div></details>`
+    );
+  })();
+
   const tldrBox = displayTldr
     ? `<aside class="callout tldr" aria-labelledby="tldr-title"><h2 id="tldr-title" class="callout-label">TL;DR</h2><p>${escapeHtml(displayTldr)}</p></aside>`
     : "";
@@ -335,6 +367,7 @@ ${siteHeader("../", opts.config.project.name)}
       </span>
     </aside>
 
+    ${verifyBox}
     ${tldrBox}
     ${takeawaysBox}
     ${isEn ? "" : reviewCard}

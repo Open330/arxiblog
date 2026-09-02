@@ -29,9 +29,43 @@ export interface VerifyInput {
   annotations: Annotation[];
 }
 
+/** One correction the fact-check applied, for reader-facing transparency. */
+export interface VerifyNote {
+  /** Human label of what was checked, e.g. "핵심 포인트" or "용어 설명: RAG". */
+  label: string;
+  /** The draft text before the fact-check. */
+  before: string;
+  /** The text after grounding it in the paper. */
+  after: string;
+}
+
+/** A summary of the fact-check, surfaced under the "원문 대조 검증" badge. */
+export interface VerifyReport {
+  /** How many distinct claims + annotations were examined against the source. */
+  checked: number;
+  /** The corrections that were applied (empty when everything matched). */
+  adjustments: VerifyNote[];
+}
+
 export interface VerifyOutput extends VerifyInput {
   /** How many claims/annotations were corrected. */
   changes: number;
+  /** Reader-facing summary of what was checked and adjusted. */
+  report: VerifyReport;
+}
+
+/** Reader-facing label for a claim id or annotation term. */
+const CLAIM_LABELS: Record<string, string> = {
+  tldr: "핵심 요약",
+  takeaway: "핵심 포인트",
+  contribution: "기여",
+  strength: "강점",
+  limitation: "한계",
+};
+
+function claimLabel(id: string): string {
+  const prefix = id.split(":")[0];
+  return CLAIM_LABELS[prefix] || "주장";
 }
 
 /** A single claim exposed to the verifier, addressable by a stable id. */
@@ -106,6 +140,7 @@ function needsFix(verdict: string, corrected: string | undefined): corrected is 
  * "ok" verdicts and empty corrections are no-ops, and nothing is ever removed.
  */
 export function applyVerification(input: VerifyInput, verdicts: Verdicts): VerifyOutput {
+  const adjustments: VerifyNote[] = [];
   const out: VerifyOutput = {
     tldr: input.tldr,
     takeaways: [...input.takeaways],
@@ -114,6 +149,7 @@ export function applyVerification(input: VerifyInput, verdicts: Verdicts): Verif
     limitations: [...input.limitations],
     annotations: input.annotations.map((a) => ({ ...a })),
     changes: 0,
+    report: { checked: collectClaims(input).length + input.annotations.length, adjustments },
   };
 
   const arrayByPrefix: Record<string, string[]> = {
@@ -127,15 +163,15 @@ export function applyVerification(input: VerifyInput, verdicts: Verdicts): Verif
     if (!needsFix(c.verdict, c.corrected)) continue;
     const corrected = c.corrected.trim();
     if (c.id === "tldr") {
-      if (corrected !== out.tldr) { out.tldr = corrected; out.changes++; }
+      if (corrected !== out.tldr) { adjustments.push({ label: claimLabel(c.id), before: out.tldr, after: corrected }); out.tldr = corrected; }
       continue;
     }
     const [prefix, idxRaw] = c.id.split(":");
     const arr = arrayByPrefix[prefix];
     const idx = Number(idxRaw);
     if (arr && Number.isInteger(idx) && idx >= 0 && idx < arr.length && corrected !== arr[idx]) {
+      adjustments.push({ label: claimLabel(c.id), before: arr[idx], after: corrected });
       arr[idx] = corrected;
-      out.changes++;
     }
   }
 
@@ -147,11 +183,12 @@ export function applyVerification(input: VerifyInput, verdicts: Verdicts): Verif
     if (META_DISCLAIMER.test(corrected)) continue;
     const target = out.annotations.find((x) => x.term.toLowerCase() === a.term.toLowerCase());
     if (target && corrected !== target.explanation) {
+      adjustments.push({ label: `용어 설명: ${target.term}`, before: target.explanation, after: corrected });
       target.explanation = corrected;
-      out.changes++;
     }
   }
 
+  out.changes = adjustments.length;
   return out;
 }
 
@@ -204,7 +241,7 @@ export async function verifyAndGround(
 ): Promise<VerifyOutput> {
   const claims = collectClaims(input);
   if (claims.length === 0 && input.annotations.length === 0) {
-    return { ...input, changes: 0 };
+    return { ...input, changes: 0, report: { checked: 0, adjustments: [] } };
   }
 
   // Ground on the passages most relevant to the claims and terms. Claims are
