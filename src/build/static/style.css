@@ -605,3 +605,19 @@ body.chat-open { overflow: hidden; }
 }
 .chat-msg.md .chat-h { margin: .6em 0 .25em; font-size: .98em; }
 .chat-msg.md .chat-h:first-child { margin-top: 0; }
+
+/* Streaming answer: a soft blinking caret while tokens arrive. */
+.chat-msg.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  opacity: 0.55;
+  border-radius: 1px;
+  animation: chatcaret 1s steps(2, start) infinite;
+}
+@keyframes chatcaret { 0%, 50% { opacity: 0.55; } 50.01%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .chat-msg.streaming::after { animation: none; } }

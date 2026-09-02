@@ -271,3 +271,67 @@ describe("LLMClient failure and deadline behavior", () => {
     expect((error as Error & { httpStatus?: number }).httpStatus).toBe(504);
   });
 });
+
+function sseBody(chunks: string[], withUsage = true): string {
+  const frames = chunks.map(
+    (c) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: c }] } }] })}\n\n`
+  );
+  if (withUsage) {
+    frames.push(
+      `data: ${JSON.stringify({ usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 3, totalTokenCount: 5 } })}\n\n`
+    );
+  }
+  return frames.join("");
+}
+
+describe("LLMClient streaming", () => {
+  test("Gemini streams deltas in order, returns the full text, and tracks usage", async () => {
+    const fetchMock = mock(async (input: string | URL | Request) => {
+      expect(String(input)).toContain("streamGenerateContent?alt=sse");
+      return new Response(sseBody(["안녕", "하세", "요"]), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    });
+    const client = new LLMClient(config("gemini"), fastOptions(fetchMock as unknown as typeof fetch));
+
+    const deltas: string[] = [];
+    const full = await client.chatStream("system", "question", 64, (d) => deltas.push(d));
+    expect(deltas).toEqual(["안녕", "하세", "요"]);
+    expect(full).toBe("안녕하세요");
+    expect(client.getUsageStats()).toEqual({ totalCalls: 1, promptTokens: 2, completionTokens: 3, totalTokens: 5 });
+  });
+
+  test("a stream failing before any output falls back to the non-streaming path", async () => {
+    let streamCalls = 0;
+    let completeCalls = 0;
+    const fetchMock = mock(async (input: string | URL | Request) => {
+      if (String(input).includes("streamGenerateContent")) {
+        streamCalls++;
+        return new Response("upstream error", { status: 500 });
+      }
+      completeCalls++;
+      return Response.json({ candidates: [{ content: { parts: [{ text: "fallback answer" }] } }] });
+    });
+    const client = new LLMClient(config("gemini"), fastOptions(fetchMock as unknown as typeof fetch));
+
+    const deltas: string[] = [];
+    const full = await client.chatStream("system", "question", 64, (d) => deltas.push(d));
+    expect(streamCalls).toBeGreaterThanOrEqual(1);
+    expect(completeCalls).toBe(1);
+    expect(full).toBe("fallback answer");
+    expect(deltas).toEqual(["fallback answer"]); // whole text emitted once
+  });
+
+  test("a non-Gemini provider streams via a single non-streaming call", async () => {
+    const create = mock(async () => openAIResponse("openai answer"));
+    const client = new LLMClient(config("openai"), fastOptions());
+    // @ts-expect-error inject fake OpenAI client
+    client._openaiClient = { chat: { completions: { create } } };
+
+    const deltas: string[] = [];
+    const full = await client.chatStream("system", "question", 64, (d) => deltas.push(d));
+    expect(full).toBe("openai answer");
+    expect(deltas).toEqual(["openai answer"]);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});

@@ -370,6 +370,18 @@
     messageElement.appendChild(retry);
   }
 
+  // Render a completed answer bubble: markdown + interactive citations + sources.
+  function finalizeAnswer(bubble, answer, sources) {
+    if (!bubble) return;
+    bubble.classList.remove("chat-typing", "streaming");
+    var hasSources = !!(sources && Array.isArray(sources) && sources.length);
+    var rendered = renderMarkdown(answer);
+    bubble.innerHTML = hasSources ? linkifyCites(rendered) : rendered;
+    bubble.classList.add("md");
+    renderSources(bubble, sources);
+    if (hasSources) wireCites(bubble);
+  }
+
   async function send(question, renderUser) {
     const q = (question || "").trim();
     if (!q || busy || !form || !log || !slug) return;
@@ -387,12 +399,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug: slug, question: q, history: history.slice(0, -1) }),
       });
-      let data = null;
-      try { data = await response.json(); } catch (_err) {}
+      var ctype = response.headers.get("content-type") || "";
       if (!response.ok) {
         removeTurn(userTurn);
-        const serverMessage = data && (data.error || data.answer);
-        const fallback = response.status === 404
+        var edata = null;
+        try { edata = await response.json(); } catch (_err) {}
+        var serverMessage = edata && (edata.error || edata.answer);
+        var fallback = response.status === 404
           ? "AI 질문은 arxiblog serve로 실행할 때 사용할 수 있어요."
           : response.status === 429
             ? "요청이 많아 잠시 답변할 수 없어요. 잠시 후 다시 시도해 주세요."
@@ -400,21 +413,63 @@
         showRetry(pending, serverMessage || fallback, q);
         return;
       }
-      const answer = data && typeof data.answer === "string" ? data.answer.trim() : "";
-      if (!answer) {
-        removeTurn(userTurn);
-        showRetry(pending, "비어 있는 답변을 받았어요.", q);
+
+      // Non-streaming JSON (chat disabled / no API key configured).
+      if (ctype.indexOf("text/event-stream") === -1) {
+        var jdata = null;
+        try { jdata = await response.json(); } catch (_err) {}
+        var janswer = jdata && typeof jdata.answer === "string" ? jdata.answer.trim() : "";
+        if (!janswer) {
+          removeTurn(userTurn);
+          showRetry(pending, "비어 있는 답변을 받았어요.", q);
+          return;
+        }
+        finalizeAnswer(pending, janswer, jdata && jdata.sources);
+        history.push({ role: "assistant", content: janswer });
         return;
       }
+
+      // Server-Sent Events: sources, then tokens as they generate, then done.
       if (pending) {
         pending.classList.remove("chat-typing");
-        var hasSources = !!(data && Array.isArray(data.sources) && data.sources.length);
-        var rendered = renderMarkdown(answer);
-        pending.innerHTML = hasSources ? linkifyCites(rendered) : rendered;
-        pending.classList.add("md");
-        renderSources(pending, data && data.sources);
-        if (hasSources) wireCites(pending);
+        pending.classList.add("streaming");
+        pending.textContent = "";
       }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = "", acc = "", srcs = null, streamErr = null;
+      for (;;) {
+        var piece = await reader.read();
+        if (piece.done) break;
+        buf += decoder.decode(piece.value, { stream: true });
+        var sep;
+        while ((sep = buf.indexOf("\n\n")) >= 0) {
+          var frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          var ev = "message", dataStr = "";
+          frame.split("\n").forEach(function (ln) {
+            if (ln.indexOf("event:") === 0) ev = ln.slice(6).trim();
+            else if (ln.indexOf("data:") === 0) dataStr += ln.slice(5).trim();
+          });
+          if (!dataStr) continue;
+          var payload;
+          try { payload = JSON.parse(dataStr); } catch (_err) { continue; }
+          if (ev === "sources") srcs = payload;
+          else if (ev === "token") {
+            acc += payload;
+            if (pending) pending.textContent = acc;
+            log.scrollTop = log.scrollHeight;
+          }
+          else if (ev === "error") streamErr = (payload && payload.message) || "답변 중 오류가 발생했어요.";
+        }
+      }
+      var answer = acc.trim();
+      if (!answer) {
+        removeTurn(userTurn);
+        showRetry(pending, streamErr || "비어 있는 답변을 받았어요.", q);
+        return;
+      }
+      finalizeAnswer(pending, answer, srcs);
       history.push({ role: "assistant", content: answer });
     } catch (_err) {
       removeTurn(userTurn);

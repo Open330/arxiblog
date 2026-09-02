@@ -22,6 +22,13 @@ export interface ChatAnswer {
   sources: ChatSource[];
 }
 
+/** Everything needed to call the LLM, plus the sources to surface — no LLM call. */
+export interface PreparedAnswer {
+  system: string;
+  user: string;
+  sources: ChatSource[];
+}
+
 /** Map a reader's intent to the paper section most likely to answer it. */
 const SECTION_INTENTS: Array<{ keywords: RegExp; pattern: RegExp }> = [
   { keywords: /한계|단점|문제점|약점|리스크|한계점|limitation|weakness|drawback/i, pattern: /limitation|discussion|conclusion/i },
@@ -39,17 +46,16 @@ function inferSectionBoost(question: string): { pattern: RegExp; factor: number 
 
 
 /**
- * Answer a reader's question grounded in the post, its annotations, and — most
- * importantly — the passages of the source paper most relevant to the question.
- * Returns the answer plus the source passages so the UI can show "원문 근거".
+ * Build the system+user prompt and pick the source passages, WITHOUT calling the
+ * LLM. Shared by the non-streaming and streaming paths so the server can surface
+ * "원문 근거" to the reader before the first token arrives.
  */
-export async function answerQuestion(
-  llm: LLMClient,
+export function prepareAnswer(
   store: Store,
   post: Post,
   question: string,
   history: ChatTurn[]
-): Promise<ChatAnswer> {
+): PreparedAnswer {
   const paper = store.getPaperByArxivId(post.arxiv_id || "");
   const annotations = store.getAnnotations(post.id);
   const rawText = paper?.raw_text || "";
@@ -117,6 +123,22 @@ ${paperContext}
 ${historyText ? "[이전 대화]\n" + historyText + "\n" : ""}[독자의 질문]
 ${question}`;
 
+  return { system, user, sources };
+}
+
+/**
+ * Answer a reader's question grounded in the post, its annotations, and the
+ * passages of the source paper most relevant to the question. Returns the answer
+ * plus the source passages so the UI can show "원문 근거".
+ */
+export async function answerQuestion(
+  llm: LLMClient,
+  store: Store,
+  post: Post,
+  question: string,
+  history: ChatTurn[]
+): Promise<ChatAnswer> {
+  const { system, user, sources } = prepareAnswer(store, post, question, history);
   const answer = (await llm.chatComplete(system, user, 1024)).trim();
   return { answer, sources };
 }

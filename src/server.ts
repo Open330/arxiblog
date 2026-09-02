@@ -11,7 +11,7 @@ import {
 } from "./config";
 import { Store } from "./store";
 import { LLMClient, LLMProviderError } from "./llm-client";
-import { answerQuestion, type ChatTurn } from "./pipeline/chat";
+import { prepareAnswer, type ChatTurn } from "./pipeline/chat";
 import { addPaper } from "./pipeline/add";
 import { parseArxivId } from "./ingest/arxiv";
 import { buildSite, type BuildStore } from "./build/renderer";
@@ -292,12 +292,9 @@ export function startServer(projectRoot: string, port: number, host = "localhost
             },
           }
         );
-        let success = false;
-        try {
-          return await handleChat(req, projectRoot, store, () => { success = true; });
-        } finally {
-          gate.finish?.(success);
-        }
+        // handleChat owns the gate: a streamed answer settles when the stream
+        // ends, not when the Response object (with an open body) is returned.
+        return await handleChat(req, projectRoot, store, gate);
       }
       if (path === "/api/chat") return methodNotAllowed("POST");
       if (path === "/api/posts" && req.method === "GET") {
@@ -465,13 +462,15 @@ async function handleChat(
   req: Request,
   projectRoot: string,
   store: Store,
-  onSuccess: () => void
+  gate: { finish?: (success: boolean) => void }
 ): Promise<Response> {
+  // finish() is idempotent; call it exactly where the request truly settles.
+  const settle = (success: boolean) => gate.finish?.(success);
   try {
     const body = await readJsonObject(req);
     const slug = optionalString(body, "slug", 120) || "";
     const question = optionalString(body, "question", MAX_QUESTION_CHARS) || "";
-    if (!slug || !question) return Response.json({ error: "slug과 question이 필요합니다." }, { status: 400 });
+    if (!slug || !question) { settle(false); return Response.json({ error: "slug과 question이 필요합니다." }, { status: 400 }); }
 
     const rawHistory = body.history ?? [];
     if (!Array.isArray(rawHistory)) throw new HttpRequestError(400, "history는 배열이어야 합니다.");
@@ -492,20 +491,61 @@ async function handleChat(
 
     const config = loadConfig(projectRoot);
     if (!hasLlmKey(config.llm) || config.llm.provider === "demo") {
+      settle(false);
       return Response.json(
         { answer: "LLM API 키가 설정되어 있지 않아 채팅을 사용할 수 없어요. 관리 페이지에서 키를 넣어주세요." },
         { status: 200 }
       );
     }
     const post = store.getPost(slug);
-    if (!post) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
+    if (!post) { settle(false); return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 }); }
+
     const llm = new LLMClient(config.llm);
-    const { answer, sources } = await answerQuestion(llm, store, post, question, history);
-    onSuccess(); // charge quota as soon as the paid/upstream answer was produced
-    const u = llm.getUsageStats();
-    store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
-    return Response.json({ answer, sources });
+    const prepared = prepareAnswer(store, post, question, history);
+
+    // Stream the answer over SSE: sources first (already known), then tokens, then
+    // done. The reader sees text appear as it is generated instead of a long wait.
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const sse = (event: string, data: unknown) =>
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        let answer = "";
+        try {
+          sse("sources", prepared.sources);
+          answer = (await llm.chatStream(prepared.system, prepared.user, 1024, (delta) => sse("token", delta))).trim();
+          if (!answer) {
+            sse("error", { message: "비어 있는 답변을 받았어요." });
+            settle(false);
+          } else {
+            sse("done", {});
+            settle(true);
+            const u = llm.getUsageStats();
+            store.addUsageLog(null, u.totalCalls, u.promptTokens, u.completionTokens, u.totalTokens, llm.getEstimatedCost());
+          }
+        } catch (e) {
+          const message = e instanceof LLMProviderError ? e.message : "답변을 가져오지 못했어요. 잠시 후 다시 시도해 주세요.";
+          sse("error", { message });
+          settle(false);
+        } finally {
+          controller.close();
+        }
+      },
+      cancel() {
+        // Reader went away before we finished — release the in-flight slot.
+        settle(false);
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+      },
+    });
   } catch (e) {
+    settle(false);
     return jsonError(e);
   }
 }

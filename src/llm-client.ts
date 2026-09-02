@@ -71,6 +71,18 @@ class ProviderQuotaError extends Error {
   }
 }
 
+/**
+ * A stream that already emitted tokens then failed. It cannot be retried or
+ * silently swapped for a fresh non-streaming call without duplicating output, so
+ * the caller must surface it as a terminal error rather than falling back.
+ */
+class PartialStreamError extends Error {
+  constructor(readonly cause: unknown) {
+    super("stream failed after partial output");
+    this.name = "PartialStreamError";
+  }
+}
+
 /** A deliberately sanitized provider failure that is safe for an API client. */
 export class LLMProviderError extends Error {
   constructor(message: string, readonly httpStatus: 429 | 502 | 504) {
@@ -497,6 +509,162 @@ export class LLMClient {
       }
     }
     throw safeProviderError(provider, lastError, this.deadlineMs);
+  }
+
+  /**
+   * Stream a completion, invoking `onDelta` with each text chunk as it arrives.
+   * Returns the full text. Streaming is implemented for Gemini (SSE); other
+   * providers — and a stream that fails before emitting anything — fall back to a
+   * single non-streaming call whose whole text is emitted at once, preserving the
+   * full retry/rotation guarantees. A stream that fails *after* emitting tokens is
+   * surfaced as a terminal error (retrying would duplicate the partial output).
+   */
+  async chatStream(
+    system: string,
+    userMessage: string,
+    maxTokens: number,
+    onDelta: (chunk: string) => void
+  ): Promise<string> {
+    const provider = this.config.provider;
+    if (!PROVIDER_NAMES[provider]) throw new Error(`Unknown LLM provider: ${provider}`);
+
+    if (provider === "gemini") {
+      try {
+        return await this.geminiStreamWithRotation(system, userMessage, maxTokens, onDelta);
+      } catch (error) {
+        if (error instanceof PartialStreamError) {
+          throw safeProviderError(provider, error.cause, this.deadlineMs);
+        }
+        // Nothing was emitted yet — fall through to the robust non-streaming path.
+      }
+    }
+
+    const text = await this.chatComplete(system, userMessage, maxTokens);
+    if (text) onDelta(text);
+    return text;
+  }
+
+  /** Gemini SSE stream with the same free-key rotation + paid-fallback policy. */
+  private async geminiStreamWithRotation(
+    system: string,
+    user: string,
+    maxTokens: number,
+    onDelta: (chunk: string) => void
+  ): Promise<string> {
+    const now = Date.now();
+    const n = this.geminiFree.length;
+    const candidates: string[] = [];
+    for (let i = 0; i < n; i++) candidates.push(this.geminiFree[(this.rr + i) % n]);
+    if (n > 0) this.rr = (this.rr + 1) % n;
+
+    if (candidates.length === 0 && !this.geminiPaid) {
+      throw new Error("Gemini API 키가 설정되지 않았습니다.");
+    }
+
+    for (const key of candidates) {
+      if ((this.cooldown.get(key) || 0) > now) continue;
+      try {
+        return await this.geminiStreamOnce(key, system, user, maxTokens, onDelta);
+      } catch (e) {
+        // A quota response (only before any output) rests this key and tries the next.
+        if (isQuotaError(e) && !(e instanceof PartialStreamError)) {
+          this.cooldown.set(key, Date.now() + 60_000);
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    if (this.geminiPaid) {
+      try {
+        return await this.geminiStreamOnce(this.geminiPaid, system, user, maxTokens, onDelta);
+      } catch (e) {
+        if (isQuotaError(e) && !(e instanceof PartialStreamError)) throw new ProviderQuotaError("gemini");
+        throw e;
+      }
+    }
+    throw new ProviderQuotaError("gemini");
+  }
+
+  /** One Gemini streamGenerateContent (SSE) request. */
+  private async geminiStreamOnce(
+    apiKey: string,
+    system: string,
+    user: string,
+    maxTokens: number,
+    onDelta: (chunk: string) => void
+  ): Promise<string> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.config.model}:streamGenerateContent?alt=sse`;
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new ProviderTimeoutError("gemini", this.requestTimeoutMs)),
+      this.requestTimeoutMs
+    );
+    let emitted = false;
+    try {
+      const resp = await this.fetchImpl(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        signal: controller.signal,
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents: [{ parts: [{ text: user }] }],
+          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.6 },
+        }),
+      });
+      if (!resp.ok) throw new ProviderHttpError("gemini", resp.status);
+      if (!resp.body) throw new ProviderHttpError("gemini", 502);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let full = "";
+      let usage: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          let obj: Record<string, unknown>;
+          try {
+            obj = JSON.parse(payload) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          const parts = (obj.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined)
+            ?.[0]?.content?.parts;
+          if (Array.isArray(parts)) {
+            const t = parts.map((p) => p.text || "").join("");
+            if (t) {
+              full += t;
+              emitted = true;
+              onDelta(t);
+            }
+          }
+          if (obj.usageMetadata) usage = obj.usageMetadata as typeof usage;
+        }
+      }
+
+      this.usage.totalCalls++;
+      if (usage) {
+        this.usage.promptTokens += usage.promptTokenCount || 0;
+        this.usage.completionTokens += usage.candidatesTokenCount || 0;
+        this.usage.totalTokens += usage.totalTokenCount || 0;
+      }
+      return full;
+    } catch (error) {
+      if (emitted) throw new PartialStreamError(error);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   getUsageStats(): UsageStats {
