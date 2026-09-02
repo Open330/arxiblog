@@ -183,7 +183,7 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 6px; font-si
 .post-body table { display: block; width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; border-collapse: collapse; font-size: .94rem; margin: 1.6em 0; }
 .post-body th, .post-body td { border: 1px solid var(--border); padding: 9px 12px; text-align: left; }
 .post-body th { background: var(--surface-2); font-weight: 700; }
-.post-body pre.mermaid { min-width: 0; background: var(--surface-2); border: 1px solid var(--border); display: flex; justify-content: center; padding: 22px; }
+.post-body pre.mermaid { min-width: 0; max-width: 100%; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--border); display: flex; justify-content: center; padding: 22px; }
 .post-body .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 3px 0; }
 
 /* Inline annotations */
@@ -694,4 +694,75 @@ body.chat-open { overflow: hidden; }
   :root:not([data-theme="light"]) .verify-item { --verify-item-bg: #0f1c15; --verify-border: #244b39; }
   :root:not([data-theme="light"]) .verify-before { color: #6b7d73; text-decoration-color: #6b7d73; }
   :root:not([data-theme="light"]) .verify-after { color: #e8ebe9; }
+}
+
+
+/* ── Mermaid diagram viewport: fit-to-width with pan/zoom (GitHub-style) ── */
+.post-body .mermaid-viewport {
+  position: relative;
+  overflow: hidden;
+  margin: 22px 0;
+  background: var(--surface-2, #f5f6f8);
+  border: 1px solid var(--border, #e3e6ea);
+  border-radius: 12px;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.post-body .mermaid-viewport.grabbing { cursor: grabbing; }
+.mermaid-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.mermaid-canvas svg { display: block; }
+.mermaid-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+.mermaid-controls button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text, #1a1a1a);
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e3e6ea);
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  transition: background 0.12s ease, transform 0.06s ease;
+}
+.mermaid-controls button:hover { background: var(--surface-2, #eef0f3); }
+.mermaid-controls button:active { transform: translateY(1px); }
+.mermaid-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  font-size: 0.72rem;
+  color: var(--text-muted, #6b7280);
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 1;
+}
+.post-body .mermaid-viewport.mermaid-fs {
+  position: fixed;
+  inset: 16px;
+  margin: 0;
+  z-index: 1000;
+  height: auto !important;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+@media (max-width: 640px) {
+  .mermaid-hint { display: none; }
 }
