@@ -185,6 +185,10 @@ export function saveConfig(root: string, config: ArxiblogConfig): void {
   ordered.llm = config.llm;
   ordered.deploy = config.deploy;
   if (config.chat) ordered.chat = config.chat;
+  // Preserve sections the settings form does not edit, so saving settings never
+  // silently drops them (e.g. a fixed [server].admin_token or [features] flags).
+  if (config.features) ordered.features = config.features;
+  if (config.server && config.server.admin_token) ordered.server = config.server;
   if (config.personas) ordered.personas = config.personas;
   const destination = join(root, CONFIG_FILE);
   const temporary = join(root, `.${CONFIG_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`);

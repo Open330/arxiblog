@@ -217,6 +217,23 @@ describe("configuration and build safety", () => {
     }
   });
 
+  test("saveConfig preserves a fixed [server].admin_token across a settings save", () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-server-token-"));
+    try {
+      const config = defaultConfig("Server token");
+      config.server = { admin_token: "0123456789abcdef0123456789abcdef" };
+      saveConfig(root, config);
+      // A later save (e.g. editing settings) must not drop the section.
+      const reloaded = loadConfig(root);
+      reloaded.default_level = "advanced";
+      saveConfig(root, reloaded);
+      expect(loadConfig(root).server?.admin_token).toBe("0123456789abcdef0123456789abcdef");
+      expect(loadConfig(root).default_level).toBe("advanced");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("loadConfig fills missing legacy sections and fields", () => {
     const root = mkdtempSync(join(tmpdir(), "arxiblog-legacy-"));
     try {
