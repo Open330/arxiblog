@@ -211,7 +211,11 @@ export function startServer(projectRoot: string, port: number, host = "localhost
   const initialConfig = loadConfig(projectRoot);
   const siteDir = resolveBuildOutputDir(projectRoot, initialConfig.build.output_dir);
   const store = new Store(join(projectRoot, DB_FILE));
-  const adminToken = crypto.randomUUID().replace(/-/g, "");
+  // A fixed token from config (≥16 chars) survives restarts so the admin
+  // bookmark keeps working; otherwise generate a fresh random one each start.
+  const configuredToken = (initialConfig.server?.admin_token || "").trim();
+  const stableToken = configuredToken.length >= 16;
+  const adminToken = stableToken ? configuredToken : crypto.randomUUID().replace(/-/g, "");
 
   const chatLimiter = makeChatLimiter(store);
 
@@ -434,7 +438,13 @@ export function startServer(projectRoot: string, port: number, host = "localhost
   if (host === "0.0.0.0") console.log(`   LAN: 같은 네트워크에서 http://<이-기기-IP>:${port}`);
   // A URL fragment is never sent to the server/proxy, so the bearer token does
   // not enter Cloudflare or access logs on the initial admin-page request.
-  console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin#token=${adminToken}`);
+  if (stableToken) {
+    // Don't echo a long-lived secret into the log on every restart; the operator
+    // set it in arxiblog.toml and already has the bookmark.
+    console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin#token=<[server].admin_token>`);
+  } else {
+    console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin#token=${adminToken}`);
+  }
   console.log(`   (정지: Ctrl+C)`);
 }
 

@@ -79,6 +79,15 @@ export interface ArxiblogConfig {
   /** Default reading level for new posts: "beginner" | "intermediate" */
   default_level?: string;
   chat?: ChatConfig;
+  /** Server-only settings (ignored by the static build). */
+  server?: {
+    /**
+     * A fixed admin token for the token-gated /admin APIs. When set (≥16 chars)
+     * it survives restarts so the /admin#token=… bookmark keeps working;
+     * otherwise a fresh random token is generated on each server start.
+     */
+    admin_token?: string;
+  };
   /** Optional generation features (default on). Each adds LLM cost per paper. */
   features?: {
     figures?: boolean; // fetch + explain paper figures
@@ -226,6 +235,8 @@ export function loadConfig(root: string): ArxiblogConfig {
     max_in_flight: nonNegativeInteger(chat.max_in_flight, DEFAULT_CHAT.max_in_flight, 256),
     trust_proxy: typeof chat.trust_proxy === "boolean" ? chat.trust_proxy : DEFAULT_CHAT.trust_proxy,
   };
+  const server = (raw.server || {}) as { admin_token?: unknown };
+  raw.server = { admin_token: typeof server.admin_token === "string" ? server.admin_token.trim() : "" };
   const personas = raw.personas?.length
     ? raw.personas
     : (() => {
