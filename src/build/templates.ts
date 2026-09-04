@@ -352,7 +352,7 @@ ${siteHeader("../", opts.config.project.name)}
     <div class="post-meta">
       ${catHtml ? `<span class="cats">${catHtml}</span>` : ""}
       <span>${post.reading_minutes}분 읽기</span>
-      <span class="level level-${escapeHtml(post.level)}">${post.level === "intermediate" ? "중급" : "입문"}</span>
+      <span class="level level-${escapeHtml(post.level)}">${post.level === "advanced" ? "고급" : post.level === "intermediate" ? "중급" : "입문"}</span>
       <span id="post-stats" class="post-stats" aria-live="polite"></span>
       ${post.reviewed_at ? '<span class="verified-badge" title="이 글의 핵심 주장과 용어 설명을 arXiv 원문과 대조해 검증했습니다.">✓ 원문 대조 검증</span>' : ""}
     </div>
@@ -546,6 +546,7 @@ export function renderAdminPage(config: ArxiblogConfig): string {
   const levelOpts = [
     ["beginner", "입문"],
     ["intermediate", "중급"],
+    ["advanced", "고급"],
   ]
     .map(([v, l]) => `<option value="${v}">${l}</option>`)
     .join("");

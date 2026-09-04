@@ -585,8 +585,8 @@ async function handleAdd(req: Request, projectRoot: string, store: Store): Promi
     } catch (error) {
       throw new HttpRequestError(400, (error as Error).message);
     }
-    if (level && level !== "beginner" && level !== "intermediate") {
-      throw new HttpRequestError(400, "level은 beginner 또는 intermediate여야 합니다.");
+    if (level && level !== "beginner" && level !== "intermediate" && level !== "advanced") {
+      throw new HttpRequestError(400, "level은 beginner, intermediate, advanced 중 하나여야 합니다.");
     }
     const config = loadConfig(projectRoot);
     if (!hasLlmKey(config.llm)) return Response.json({ error: "LLM API 키가 설정되지 않았습니다." }, { status: 400 });
@@ -623,8 +623,8 @@ export async function handleSettings(req: Request, projectRoot: string): Promise
     if (activePersona && !(config.personas || []).some((item) => item.name === activePersona)) {
       throw new HttpRequestError(400, `알 수 없는 persona입니다: ${activePersona}`);
     }
-    if (defaultLevel && defaultLevel !== "beginner" && defaultLevel !== "intermediate") {
-      throw new HttpRequestError(400, "default_level은 beginner 또는 intermediate여야 합니다.");
+    if (defaultLevel && defaultLevel !== "beginner" && defaultLevel !== "intermediate" && defaultLevel !== "advanced") {
+      throw new HttpRequestError(400, "default_level은 beginner, intermediate, advanced 중 하나여야 합니다.");
     }
     if (clearApiKeys && apiKey) {
       throw new HttpRequestError(400, "API Key 저장과 전체 삭제를 동시에 요청할 수 없습니다.");

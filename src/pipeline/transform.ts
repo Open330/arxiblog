@@ -27,7 +27,9 @@ const MAX_BODY_CHARS = 48_000;
 
 function buildSystemPrompt(persona: Persona, level: string): string {
   const levelGuide =
-    level === "intermediate"
+    level === "advanced"
+      ? "독자는 이 분야에 익숙한 전문가·대학원생 수준이다. 기초 설명은 최소화하고, 방법의 핵심 메커니즘과 수식, 설계 선택과 그 근거, 기존 연구와의 기술적 차이를 깊이 있게 파고든다. 전문용어는 정확히 쓰되 남용하지 않고, 필요한 수식은 생략하지 말고 제시한다."
+      : level === "intermediate"
       ? "독자는 약간의 배경지식이 있다. 핵심 개념은 짚되 너무 기초적인 설명에 분량을 낭비하지 않는다."
       : "독자는 이 분야를 처음 접한다. 모든 전문용어를 풀어서 설명하고, 직관적인 비유를 적극 사용한다.";
 

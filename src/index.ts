@@ -91,7 +91,7 @@ program
 program
   .command("add <source>")
   .description("arXiv 논문(ID/URL)을 블로그 글로 변환합니다")
-  .option("-l, --level <level>", "난이도: beginner | intermediate")
+  .option("-l, --level <level>", "난이도: beginner | intermediate | advanced")
   .option("-p, --persona <name>", "글쓰기 페르소나 이름")
   .option("--no-build", "변환 후 사이트를 다시 빌드하지 않음")
   .action(async (source: string, opts: { level?: string; persona?: string; build?: boolean }) => {
@@ -139,7 +139,7 @@ program
   .description("최신 arXiv 논문 여러 편을 한 번에 블로그 글로 변환합니다")
   .option("-c, --categories <list>", "arXiv 카테고리 (쉼표로 구분)", "cs.LG,cs.CL,cs.AI")
   .option("-n, --count <n>", "생성할 글 개수", "3")
-  .option("-l, --level <level>", "난이도: beginner | intermediate")
+  .option("-l, --level <level>", "난이도: beginner | intermediate | advanced")
   .option("-p, --persona <name>", "글쓰기 페르소나 이름")
   .option("--no-build", "변환 후 사이트를 다시 빌드하지 않음")
   .action(async (opts: { categories: string; count: string; level?: string; persona?: string; build?: boolean }) => {
