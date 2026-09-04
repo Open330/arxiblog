@@ -23,44 +23,102 @@ export function stripJsonFences(raw: string): string {
 }
 
 /**
+ * Repair the most common way an LLM breaks JSON: LaTeX inside a string value
+ * (e.g. "\frac", "\right", "\pi", "\mathbb") where the backslash is not a valid
+ * JSON escape. Walk the text tracking string state and double any lone
+ * backslash that begins a LaTeX command, while leaving genuine escapes
+ * (\", \\, \/, \uXXXX, and control \n/\t/\r) intact.
+ *
+ * The hard case is \n/\t/\r/\f/\b: these are valid JSON control escapes AND the
+ * start of common LaTeX commands (\nabla, \times, \right, \frac, \beta). We
+ * disambiguate by lookahead — if the next character is a lowercase latin
+ * letter, it is a LaTeX command word (\right, \nabla) and the backslash is
+ * escaped; otherwise (\n\n, \n#, \n다음, end of value) it is a real control
+ * escape and kept. Raw control chars inside strings are also escaped.
+ */
+export function repairLlmJson(s: string): string {
+  const isLowerLatin = (ch: string) => ch >= "a" && ch <= "z";
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (!inStr) {
+      out += c;
+      if (c === '"') inStr = true;
+      continue;
+    }
+    if (c === '"') { out += c; inStr = false; continue; }
+    if (c === "\\") {
+      const n1 = s[i + 1];
+      const n2 = s[i + 2] ?? "";
+      if (n1 === '"' || n1 === "\\" || n1 === "/") {
+        out += c + n1; i++; // unambiguous escape
+      } else if (n1 === "u" && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 2, i + 6))) {
+        out += s.slice(i, i + 6); i += 5; // \uXXXX
+      } else if ((n1 === "n" || n1 === "t" || n1 === "r" || n1 === "f" || n1 === "b") && !isLowerLatin(n2)) {
+        out += c + n1; i++; // genuine control escape, not a LaTeX word
+      } else {
+        out += "\\\\"; // LaTeX command / spacing (\frac, \pi, \,) → escape it
+      }
+    } else if (c === "\n") { out += "\\n"; }
+    else if (c === "\r") { out += "\\r"; }
+    else if (c === "\t") { out += "\\t"; }
+    else { out += c; }
+  }
+  return out;
+}
+
+/** Return the first balanced {…} or […] block, or null if there is none. */
+function extractBalancedJson(cleaned: string): string | null {
+  const objStart = cleaned.indexOf("{");
+  const arrStart = cleaned.indexOf("[");
+  const candidates = [objStart, arrStart].filter((i) => i !== -1);
+  if (candidates.length === 0) return null;
+  const start = Math.min(...candidates);
+  const open = cleaned[start];
+  const close = open === "{" ? "}" : "]";
+
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) return cleaned.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
  * Parse JSON from an LLM response that may be wrapped in prose or code fences.
- * Falls back to extracting the first {...} or [...] block.
+ * Tries, in order: the cleaned text as-is, a backslash/control-char repair of
+ * it, then the first balanced {...}/[...] block (raw, then repaired) — so a
+ * stray LaTeX backslash in a string value no longer fails the whole parse.
  */
 export function parseLlmJson<T = unknown>(raw: string): T {
   const cleaned = stripJsonFences(raw);
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    // Extract the first balanced JSON value, tracking string/escape state so that
-    // braces inside string values (or trailing prose like ":}") don't fool us.
-    const objStart = cleaned.indexOf("{");
-    const arrStart = cleaned.indexOf("[");
-    const candidates = [objStart, arrStart].filter((i) => i !== -1);
-    if (candidates.length === 0) throw new Error("No JSON found in LLM response");
-    const start = Math.min(...candidates);
-    const open = cleaned[start];
-    const close = open === "{" ? "}" : "]";
-
-    let depth = 0;
-    let inStr = false;
-    let escaped = false;
-    for (let i = start; i < cleaned.length; i++) {
-      const c = cleaned[i];
-      if (inStr) {
-        if (escaped) escaped = false;
-        else if (c === "\\") escaped = true;
-        else if (c === '"') inStr = false;
-        continue;
-      }
-      if (c === '"') inStr = true;
-      else if (c === open) depth++;
-      else if (c === close) {
-        depth--;
-        if (depth === 0) return JSON.parse(cleaned.slice(start, i + 1)) as T;
-      }
+  const block = extractBalancedJson(cleaned);
+  const attempts = [cleaned, repairLlmJson(cleaned)];
+  if (block !== null) attempts.push(block, repairLlmJson(block));
+  let lastError: unknown;
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch (e) {
+      lastError = e;
     }
-    throw new Error("Unterminated JSON in LLM response");
   }
+  throw lastError instanceof Error ? lastError : new Error("No JSON found in LLM response");
 }
 
 /** Split a comma-separated category string into trimmed, non-empty parts. */

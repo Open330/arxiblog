@@ -103,7 +103,11 @@ flowchart TD
   "suggested_questions": ["질문 1", "질문 2", "질문 3"],
   "key_references": [{ "title": "선행연구 제목", "why": "왜 중요한지 한 줄", "arxiv_id": "1706.03762" }]
 }
-content 안의 mermaid 코드펜스 줄바꿈은 \\n 으로 정확히 이스케이프하세요. kind 값: "jargon" | "concept" | "context" | "math".`;
+content 안의 mermaid 코드펜스 줄바꿈은 \\n 으로 정확히 이스케이프하세요. kind 값: "jargon" | "concept" | "context" | "math".
+
+[JSON 안전 — 반드시 지킬 것] 출력이 유효한 JSON이 아니면 글 전체가 버려집니다.
+- 문자열 값 안에서는 ASCII 큰따옴표(")를 쓰지 마세요. 인용·논문 제목·강조에는 한국어 따옴표 ' ' 나 겹낫표 「」 『』 를 씁니다. (예: 논문 제목은 '카탈랑 상수는 무리수다', 저자가 말한 '가중치 꼬리')
+- 실제 줄바꿈 대신 \\n 을 씁니다. LaTeX의 역슬래시는 JSON 문자열 안에서 \\\\ 로 이스케이프합니다 (예: "$\\\\frac{a}{q}$").`;
 }
 
 function buildUserPrompt(meta: ArxivMeta, rawText: string): string {
@@ -134,15 +138,29 @@ export async function transformToBlog(
   level: string
 ): Promise<BlogResult> {
   const system = buildSystemPrompt(persona, level);
-  const user = buildUserPrompt(meta, rawText);
-  const raw = await llm.chatComplete(system, user, 16_384);
+  const baseUser = buildUserPrompt(meta, rawText);
 
+  // The model occasionally emits invalid JSON (an unescaped inner quote, a stray
+  // LaTeX backslash). parseLlmJson repairs backslashes/control chars; for the
+  // rest, retry once with a corrective nudge — a fresh sample usually parses.
+  const RETRY_NUDGE =
+    "\n\n[재요청] 직전 응답이 유효한 JSON이 아니었습니다. 문자열 값 안의 큰따옴표(\")를 한국어 따옴표 ' ' 나 「」 로 바꾸고, 줄바꿈은 \\n, LaTeX 역슬래시는 \\\\ 로 이스케이프하여 반드시 유효한 JSON 하나만 출력하세요.";
   let parsed: unknown;
-  try {
-    parsed = parseLlmJson(raw);
-  } catch (e) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await llm.chatComplete(system, attempt === 0 ? baseUser : baseUser + RETRY_NUDGE, 16_384);
+    try {
+      parsed = parseLlmJson(raw);
+      lastError = undefined;
+      break;
+    } catch (e) {
+      lastError = e;
+      if (process.env.ARXIBLOG_DEBUG_RAW) { try { await Bun.write(process.env.ARXIBLOG_DEBUG_RAW, raw); } catch {} }
+    }
+  }
+  if (lastError) {
     throw new Error(
-      `LLM 응답을 JSON으로 파싱하지 못했습니다. 모델을 더 큰 것으로 바꾸거나 다시 시도해 주세요.\n${(e as Error).message}`
+      `LLM 응답을 JSON으로 파싱하지 못했습니다. 모델을 더 큰 것으로 바꾸거나 다시 시도해 주세요.\n${(lastError as Error).message}`
     );
   }
 

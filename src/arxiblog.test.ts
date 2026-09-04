@@ -85,6 +85,18 @@ describe("parseLlmJson", () => {
   test("stripJsonFences removes md fences", () => {
     expect(stripJsonFences("```json\n{}\n```")).toBe("{}");
   });
+  test("repairs unescaped LaTeX backslashes in string values", () => {
+    // gemini emits `\frac`, `\right`, `\pi` etc. inside JSON strings unescaped.
+    const r = parseLlmJson<{ eq: string; ok: string }>('{"eq":"G=\\frac{a}{q}, \\right, \\pi","ok":"a real \\"quote\\""}');
+    expect(r.eq).toBe("G=\\frac{a}{q}, \\right, \\pi");
+    expect(r.ok).toContain('"quote"');
+  });
+  test("valid escapes and control newlines survive the repair", () => {
+    // \\ stays a literal backslash; \n before a non-letter stays a newline.
+    const r = parseLlmJson<{ path: string; nl: string }>('{"path":"a\\\\b\\\\c","nl":"para1\\n\\n# para2"}');
+    expect(r.path).toBe("a\\b\\c");
+    expect(r.nl).toBe("para1\n\n# para2");
+  });
 });
 
 describe("slugify / reading time", () => {
