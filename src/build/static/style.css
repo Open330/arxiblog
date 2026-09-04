@@ -766,3 +766,8 @@ body.chat-open { overflow: hidden; }
 @media (max-width: 640px) {
   .mermaid-hint { display: none; }
 }
+
+/* Math inside chat answers: keep display equations compact and scrollable. */
+.chat-msg.md .katex-display { margin: 0.5em 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+.chat-msg.md .katex { font-size: 1em; }
+.chat-msg.md .katex-display > .katex { font-size: 1.05em; }

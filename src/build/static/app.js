@@ -374,14 +374,45 @@
   // first streaming 5xx (e.g. a Cloudflare tunnel that rejects streamed responses).
   var sseSupported = true;
 
+  // Render TeX math ($…$, $…$) in a chat bubble when KaTeX auto-render is on
+  // the page. Paper chat answers routinely contain math, which was shown raw.
+  // The model often wraps short inline symbols ($G$, $\pi$) in display math,
+  // which renders as an ugly centered block mid-sentence. Downgrade short,
+  // single-line, non-aligned $…$ to inline $…$; real multi-line/aligned
+  // equations (\\, &, \begin) stay display.
+  function normalizeMathDelims(s) {
+    return String(s == null ? "" : s).replace(/\$\$([^\n]{1,40}?)\$\$/g, function (m, inner) {
+      if (/\\\\|\\begin|\\end|&|\\tag/.test(inner)) return m;
+      return "$" + inner.trim() + "$";
+    });
+  }
+
+  function renderChatMath(el) {
+    if (!window.renderMathInElement) return;
+    try {
+      window.renderMathInElement(el, {
+        delimiters: [
+          { left: "$", right: "$", display: true },
+          { left: "\\[", right: "\\]", display: true },
+          { left: "$", right: "$", display: false },
+          { left: "\\(", right: "\\)", display: false },
+        ],
+        throwOnError: false,
+        ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+      });
+    } catch (_e) {}
+  }
+
   // Render a completed answer bubble: markdown + interactive citations + sources.
   function finalizeAnswer(bubble, answer, sources) {
     if (!bubble) return;
+    answer = normalizeMathDelims(answer);
     bubble.classList.remove("chat-typing", "streaming");
     var hasSources = !!(sources && Array.isArray(sources) && sources.length);
     var rendered = renderMarkdown(answer);
     bubble.innerHTML = hasSources ? linkifyCites(rendered) : rendered;
     bubble.classList.add("md");
+    renderChatMath(bubble);
     renderSources(bubble, sources);
     if (hasSources) wireCites(bubble);
   }

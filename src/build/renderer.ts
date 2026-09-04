@@ -483,7 +483,7 @@ async function renderSiteInto(
     }
   }
 
-  copyVendorAssets(staticDir, { math: siteHasMath, mermaid: siteHasMermaid });
+  copyVendorAssets(staticDir, { math: siteHasMath || config.chat?.enabled !== false, mermaid: siteHasMermaid });
 
   const indexHtml = renderIndexPage({ config, posts });
   await Bun.write(join(outputDir, "index.html"), indexHtml);

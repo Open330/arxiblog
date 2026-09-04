@@ -107,9 +107,9 @@ function siteHeader(homeHref: string, siteName: string): string {
 </header>`;
 }
 
-function clientScripts(annotJson: string, assetPrefix: string, hasMath: boolean, hasMermaid: boolean): string {
+function clientScripts(annotJson: string, assetPrefix: string, hasMath: boolean, hasMermaid: boolean, loadKatex = false): string {
   const richScripts = [
-    hasMath ? `<script defer src="${assetPrefix}static/vendor/katex/katex.min.js"></script>
+    (hasMath || loadKatex) ? `<script defer src="${assetPrefix}static/vendor/katex/katex.min.js"></script>
 <script defer src="${assetPrefix}static/vendor/katex/auto-render.min.js"></script>` : "",
     hasMermaid ? `<script defer src="${assetPrefix}static/vendor/mermaid/mermaid.min.js"></script>` : "",
     hasMath || hasMermaid ? `<script defer src="${assetPrefix}static/rich.js"></script>` : "",
@@ -331,10 +331,12 @@ export function renderPostPage(opts: {
         ]
       : [];
 
+  const chatEnabled = opts.config?.chat?.enabled !== false;
+  const loadKatex = !!opts.hasMath || chatEnabled;
   return `${head(`${displayTitle} · ${opts.config.project.name}`, description, {
     assetPrefix: "../",
     canonicalUrl,
-    mathContent: opts.hasMath,
+    mathContent: loadKatex,
     ogType: "article",
     siteName: opts.config.project.name,
     ogImage: opts.ogImage,
@@ -415,7 +417,7 @@ ${siteHeader("../", opts.config.project.name)}
   </form>
 </section>
 
-${clientScripts(annotJson, "../", !!opts.hasMath, !!opts.hasMermaid)}
+${clientScripts(annotJson, "../", !!opts.hasMath, !!opts.hasMermaid, loadKatex)}
 </body>
 </html>`;
 }

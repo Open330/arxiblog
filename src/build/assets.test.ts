@@ -177,7 +177,10 @@ describe("offline static assets", () => {
       post("diagram", "~~~mermaid\nflowchart TD\n  A --> B\n~~~~"),
       post("both", "$$x^2$$\n\n```mermaid\nsequenceDiagram\n  A->>B: hello\n```"),
     ];
-    await buildSite({ listPosts: () => posts, getAnnotations: () => [] }, defaultConfig("Conditional"), root);
+    // Disable chat so this checks the body-driven renderer selection in isolation
+    // (chat enabled would load KaTeX on every post for chat math — covered below).
+    const noChat = { ...defaultConfig("Conditional"), chat: { enabled: false } };
+    await buildSite({ listPosts: () => posts, getAnnotations: () => [] }, noChat, root);
     const readPost = (slug: string) => readFileSync(join(root, "_site", "p", `${slug}.html`), "utf-8");
     const plain = readPost("plain");
     const math = readPost("math");
@@ -199,11 +202,25 @@ describe("offline static assets", () => {
     temporaryRoots.push(plainRoot);
     await buildSite(
       { listPosts: () => [post("plain-only", "외부 렌더러가 필요 없는 글")], getAnnotations: () => [] },
-      defaultConfig("Plain only"),
+      { ...defaultConfig("Plain only"), chat: { enabled: false } },
       plainRoot
     );
     expect(existsSync(join(plainRoot, "_site", "static", "vendor", "katex"))).toBe(false);
     expect(existsSync(join(plainRoot, "_site", "static", "vendor", "mermaid"))).toBe(false);
+
+    // With chat enabled (the default), post pages load KaTeX so chat answers can
+    // render math even when the body has none — but not rich.js (body-only).
+    const chatRoot = mkdtempSync(join(tmpdir(), "arxiblog-chat-assets-"));
+    temporaryRoots.push(chatRoot);
+    await buildSite(
+      { listPosts: () => [post("chat-only", "수식 없는 본문이지만 챗은 켜져 있음")], getAnnotations: () => [] },
+      defaultConfig("Chat only"),
+      chatRoot
+    );
+    const chatOnly = readFileSync(join(chatRoot, "_site", "p", "chat-only.html"), "utf-8");
+    expect(chatOnly).toContain("vendor/katex/katex.min.js");
+    expect(chatOnly).not.toContain("static/rich.js");
+    expect(existsSync(join(chatRoot, "_site", "static", "vendor", "katex"))).toBe(true);
   });
 
   test("versioned arXiv links keep the requested PDF revision", async () => {
