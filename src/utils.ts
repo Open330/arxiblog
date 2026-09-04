@@ -121,6 +121,17 @@ export function parseLlmJson<T = unknown>(raw: string): T {
   throw lastError instanceof Error ? lastError : new Error("No JSON found in LLM response");
 }
 
+/**
+ * Repair a display-math block the model opened with `$$` but closed with a lone
+ * `$` (before a blank line or end of input), e.g. `$$u_m := \frac{T_m}{2m+1}$`.
+ * The lone `$` is doubled so it becomes a proper `$$…$$` block. Without this the
+ * unclosed `$$` pairs with the *next* `$$` far below and swallows the paragraphs
+ * and headings in between into one broken "equation".
+ */
+export function repairMathDelimiters(md: string): string {
+  return md.replace(/(\$\$(?:(?!\$\$|\n\n)[\s\S])*?)\$(?!\$)(?=[^$\n]*(?:\n\n|$))/g, "$1$$$$");
+}
+
 /** Split a comma-separated category string into trimmed, non-empty parts. */
 export function splitCategories(s: string | undefined | null): string[] {
   return (s || "").split(",").map((c) => c.trim()).filter(Boolean);

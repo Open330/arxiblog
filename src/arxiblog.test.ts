@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "os";
 import { join } from "path";
 import { fetchArxivFullText, fetchArxivMeta, MAX_PDF_BYTES, parseArxivId } from "./ingest/arxiv";
-import { parseLlmJson, slugify, estimateReadingMinutes, stripJsonFences } from "./utils";
+import { parseLlmJson, slugify, estimateReadingMinutes, stripJsonFences, repairMathDelimiters } from "./utils";
 import { buildSite, renderPostBody, generateToc, injectHeadingIds } from "./build/renderer";
 import { renderNotFoundPage } from "./build/templates";
 import { CONFIG_FILE, defaultConfig, hasLlmKey, loadConfig, resolveBuildOutputDir, saveConfig } from "./config";
@@ -85,6 +85,11 @@ describe("parseLlmJson", () => {
   test("stripJsonFences removes md fences", () => {
     expect(stripJsonFences("```json\n{}\n```")).toBe("{}");
   });
+  test("repairMathDelimiters balances a $$…$ block, leaves good ones alone", () => {
+    expect(repairMathDelimiters("$$x=1$\n\nnext")).toBe("$$x=1$$\n\nnext");
+    expect(repairMathDelimiters("$$x=1$$\n\nok")).toBe("$$x=1$$\n\nok");
+    expect(repairMathDelimiters("inline $y$ only")).toBe("inline $y$ only");
+  });
   test("repairs unescaped LaTeX backslashes in string values", () => {
     // gemini emits `\frac`, `\right`, `\pi` etc. inside JSON strings unescaped.
     const r = parseLlmJson<{ eq: string; ok: string }>('{"eq":"G=\\frac{a}{q}, \\right, \\pi","ok":"a real \\"quote\\""}');
@@ -116,6 +121,13 @@ describe("renderPostBody", () => {
     const h = await renderPostBody("인라인 $f(x)<g(x)$ 그리고 가격 $5, $10.", []);
     expect(h).toContain("$f(x)&lt;g(x)$");
     expect(h).toContain("$5, $10");
+  });
+  test("a $$…$ block closed by a lone $ does not swallow the next heading", async () => {
+    const md = "앞 문단.\n\n$$u_m := \\frac{T_m}{2m+1}$\n\n## 어떻게 동작하나\n\n본문 계속.";
+    const h = await renderPostBody(md, []);
+    expect(h).toContain("<h2"); // heading survived instead of being eaten into math
+    expect(h).toContain("어떻게 동작하나");
+    expect(h).toContain("$$u_m := \\frac{T_m}{2m+1}$$"); // delimiter repaired to a real block
   });
   test("annotation fuzzy match + plain fallback for unmatched", async () => {
     const h = await renderPostBody("핵심은 [[어텐션 메커니즘]]과 [[모르는용어]] 입니다.", [

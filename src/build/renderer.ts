@@ -16,7 +16,7 @@ import type { Store, Annotation } from "../store";
 import { renderPostPage, renderIndexPage, renderNotFoundPage, safePublicUrl } from "./templates";
 import { renderFeed } from "./feed";
 import { writeOgImages, ogPngEnabled } from "./og";
-import { escapeHtml, splitCategories } from "../utils";
+import { escapeHtml, splitCategories, repairMathDelimiters } from "../utils";
 
 function normalizeTerm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -213,8 +213,11 @@ async function renderPostBodyWithAssets(content: string, annotations: Annotation
   });
 
   // Protect LaTeX math from marked(). Block math first, then inline.
+  // Repair a $…$ (lone-$ close) first, then match blocks WITHOUT crossing a
+  // blank line, so a malformed delimiter can't swallow the next heading.
+  markdown = repairMathDelimiters(markdown);
   const mathPlaceholders: string[] = [];
-  markdown = markdown.replace(/\$\$[\s\S]+?\$\$/g, (m) => {
+  markdown = markdown.replace(/\$\$(?:(?!\$\$|\n\n)[\s\S])+?\$\$/g, (m) => {
     mathPlaceholders.push(m);
     return `%%${tokenNamespace}MATHB${mathPlaceholders.length - 1}%%`;
   });
