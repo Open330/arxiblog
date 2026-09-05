@@ -1,4 +1,4 @@
-import { join, normalize, extname, sep } from "path";
+import { join, normalize, extname, relative, sep } from "path";
 import { existsSync, realpathSync, statSync } from "fs";
 import {
   DB_FILE,
@@ -9,7 +9,7 @@ import {
   hasLlmKey,
   resolveBuildOutputDir,
 } from "./config";
-import { Store } from "./store";
+import { DEFAULT_DAY_OFFSET_MINUTES, Store } from "./store";
 import { LLMClient, LLMProviderError } from "./llm-client";
 import { prepareAnswer, type ChatTurn } from "./pipeline/chat";
 import { addPaper } from "./pipeline/add";
@@ -101,6 +101,67 @@ export function jsonError(
     { error: "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요." },
     { status: 500, headers: { "Cache-Control": "no-store" } }
   );
+}
+
+/**
+ * Minimal policy covering what the rendered site actually loads.
+ *
+ * `script-src`/`style-src` keep 'unsafe-inline': the build emits inline
+ * bootstrap scripts (theme restore, the `window.__ARXIBLOG_ANNOTATIONS__`
+ * payload, the admin form logic) and KaTeX/mermaid inject <style> elements at
+ * runtime, and a per-response nonce cannot reach statically built pages. The
+ * policy still blocks third-party script/frame/connect origins, plugins, base
+ * tag hijacking, cross-origin form posts, and framing.
+ *
+ * `img-src` allows any https origin because paper figures are hot-linked from
+ * arxiv.org (see the figures section of the post template).
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self'",
+  "connect-src 'self'",
+].join("; ");
+
+/** Headers for any response a browser will render as a document. */
+export function documentSecurityHeaders(): Record<string, string> {
+  return {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    // Redundant with frame-ancestors, but still honoured by older browsers.
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+  };
+}
+
+/**
+ * Path-based caching so the rule survives the vendor directory being
+ * reshuffled: everything under static/vendor/ is a pinned third-party build
+ * that is replaced by writing a different path, never edited in place.
+ */
+export function staticCacheControl(siteRelativePath: string, extension: string): string {
+  const normalized = siteRelativePath.split(sep).join("/").replace(/^\/+/, "");
+  if (normalized.startsWith("static/vendor/")) return "public, max-age=31536000, immutable";
+  if ([".html", ".json", ".css", ".js"].includes(extension)) return "no-cache";
+  return "public, max-age=3600";
+}
+
+/** Day boundary for the one-view-per-IP-per-day rule; defaults to KST. */
+export function engagementDayOffsetMinutes(
+  raw = process.env.ARXIBLOG_DAY_OFFSET_MINUTES
+): number {
+  const text = (raw || "").trim();
+  if (!text) return DEFAULT_DAY_OFFSET_MINUTES;
+  const value = Number(text);
+  if (!Number.isFinite(value) || Math.abs(value) > 14 * 60) return DEFAULT_DAY_OFFSET_MINUTES;
+  return Math.trunc(value);
 }
 
 function methodNotAllowed(allow: string): Response {
@@ -196,18 +257,19 @@ function safeJoin(root: string, urlPath: string): string | null {
   return full;
 }
 
-function confinedRealPath(root: string, filePath: string): string | null {
+function confinedRealPath(root: string, filePath: string): { real: string; relative: string } | null {
   try {
     const rootReal = realpathSync(root);
     const fileReal = realpathSync(filePath);
     if (fileReal !== rootReal && !fileReal.startsWith(rootReal + sep)) return null;
-    return fileReal;
+    return { real: fileReal, relative: relative(rootReal, fileReal) };
   } catch {
     return null;
   }
 }
 
-export function startServer(projectRoot: string, port: number, host = "localhost"): void {
+/** Returns the running server so callers (and tests) can shut it down. */
+export function startServer(projectRoot: string, port: number, host = "localhost") {
   const initialConfig = loadConfig(projectRoot);
   const siteDir = resolveBuildOutputDir(projectRoot, initialConfig.build.output_dir);
   const store = new Store(join(projectRoot, DB_FILE));
@@ -219,9 +281,10 @@ export function startServer(projectRoot: string, port: number, host = "localhost
 
   const chatLimiter = makeChatLimiter(store);
 
-  // Lightweight in-memory guards for the public engagement endpoints.
-  const viewSeen = new Set<string>(); // `${ip}|${slug}|${day}` — one view per IP/post/day
-  const reactSeen = new Set<string>(); // `${ip}|${slug}` — one reaction per IP/post
+  // One view per IP/post/day and one reaction per IP/post are enforced in
+  // SQLite (see Store.recordView/recordReaction) so the guard survives a
+  // restart and cannot grow unbounded in this long-lived process.
+  const dayOffsetMinutes = engagementDayOffsetMinutes();
   const engageHits = new Map<string, number[]>(); // per-IP flood guard
   const engageOk = (ip: string): boolean => {
     const now = Date.now();
@@ -249,7 +312,7 @@ export function startServer(projectRoot: string, port: number, host = "localhost
     return t === adminToken;
   };
 
-  Bun.serve({
+  const server = Bun.serve({
     port,
     hostname: host,
     idleTimeout: 255, // allow long LLM calls during /api/add
@@ -267,8 +330,10 @@ export function startServer(projectRoot: string, port: number, host = "localhost
           headers: {
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
+            ...documentSecurityHeaders(),
+            // The admin URL carries the token in its fragment; never leak the
+            // page's address, not even the origin.
             "Referrer-Policy": "no-referrer",
-            "X-Content-Type-Options": "nosniff",
           },
         });
       }
@@ -316,12 +381,15 @@ export function startServer(projectRoot: string, port: number, host = "localhost
       if (path === "/api/view" && req.method === "POST") {
         const ip = engIp();
         if (!engageOk(ip)) return Response.json({ views: 0, reactions: 0 }, { status: 429 });
+        // Best effort by design: a malformed/oversized body or a missing post
+        // reports zeroes rather than an error, so a reader never sees a failure
+        // from a background beacon.
         try {
-          const { slug } = (await req.json()) as { slug?: string };
+          const body = await readJsonObject(req);
+          const slug = typeof body.slug === "string" ? body.slug : "";
           if (slug && store.getPost(slug)) {
-            const key = `${ip}|${slug}|${new Date(Date.now()).toISOString().slice(0, 10)}`;
-            if (!viewSeen.has(key)) { viewSeen.add(key); store.incrementView(slug); }
-            return Response.json(store.getStats(slug));
+            const { views, reactions } = store.recordView(ip, slug, Date.now(), dayOffsetMinutes);
+            return Response.json({ views, reactions });
           }
         } catch { /* ignore */ }
         return Response.json({ views: 0, reactions: 0 });
@@ -331,12 +399,11 @@ export function startServer(projectRoot: string, port: number, host = "localhost
         const ip = engIp();
         if (!engageOk(ip)) return Response.json({ error: "잠시 후 다시 시도해 주세요." }, { status: 429 });
         try {
-          const { slug } = (await req.json()) as { slug?: string };
+          const body = await readJsonObject(req);
+          const slug = typeof body.slug === "string" ? body.slug : "";
           if (!slug || !store.getPost(slug)) return Response.json({ error: "글을 찾을 수 없습니다." }, { status: 404 });
-          const key = `${ip}|${slug}`;
-          const reactions = reactSeen.has(key) ? store.getStats(slug).reactions : (reactSeen.add(key), store.incrementReaction(slug));
-          return Response.json({ reactions });
-        } catch (e) { return Response.json({ error: (e as Error).message }, { status: 500 }); }
+          return Response.json({ reactions: store.recordReaction(ip, slug).reactions });
+        } catch (e) { return jsonError(e); }
       }
       if (path === "/api/react") return methodNotAllowed("POST");
       if (path === "/api/stats" && req.method === "GET") {
@@ -348,14 +415,14 @@ export function startServer(projectRoot: string, port: number, host = "localhost
         const ip = engIp();
         if (!engageOk(ip)) return Response.json({ error: "잠시 후 다시 시도해 주세요." }, { status: 429 });
         try {
-          const { email } = (await req.json()) as { email?: string };
-          const e = (email || "").trim().toLowerCase();
+          const body = await readJsonObject(req);
+          const e = (typeof body.email === "string" ? body.email : "").trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) || e.length > 200) {
             return Response.json({ error: "유효한 이메일을 입력해 주세요." }, { status: 400 });
           }
           store.addSubscriber(e);
           return Response.json({ ok: true });
-        } catch (err) { return Response.json({ error: (err as Error).message }, { status: 500 }); }
+        } catch (err) { return jsonError(err); }
       }
       if (path === "/api/subscribe") return methodNotAllowed("POST");
 
@@ -411,7 +478,7 @@ export function startServer(projectRoot: string, port: number, host = "localhost
             headers: {
               "Content-Type": "text/html; charset=utf-8",
               "Cache-Control": "no-cache",
-              "X-Content-Type-Options": "nosniff",
+              ...documentSecurityHeaders(),
             },
           });
         }
@@ -419,12 +486,16 @@ export function startServer(projectRoot: string, port: number, host = "localhost
       }
       const confined = confinedRealPath(siteDir, filePath);
       if (!confined) return new Response("Forbidden", { status: 403 });
-      const extension = extname(confined).toLowerCase();
-      return new Response(req.method === "HEAD" ? null : Bun.file(confined), {
+      const extension = extname(confined.real).toLowerCase();
+      // Only documents a browser renders in their own origin need the full
+      // policy; adding it to a stylesheet or font would be inert noise.
+      const isDocument = extension === ".html" || extension === ".svg";
+      return new Response(req.method === "HEAD" ? null : Bun.file(confined.real), {
         headers: {
           "Content-Type": MIME[extension] || "application/octet-stream",
-          "Cache-Control": [".html", ".json", ".css", ".js"].includes(extension) ? "no-cache" : "public, max-age=3600",
+          "Cache-Control": staticCacheControl(confined.relative, extension),
           "X-Content-Type-Options": "nosniff",
+          ...(isDocument ? documentSecurityHeaders() : {}),
         },
       });
     },
@@ -446,6 +517,7 @@ export function startServer(projectRoot: string, port: number, host = "localhost
     console.log(`\x1b[34m🔧 관리 페이지:\x1b[0m http://${shown}:${port}/admin#token=${adminToken}`);
   }
   console.log(`   (정지: Ctrl+C)`);
+  return server;
 }
 
 function optionalString(

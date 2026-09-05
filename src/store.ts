@@ -12,9 +12,44 @@ const DAY_MS = 24 * HOUR_MS;
  */
 export const CHAT_QUOTA_RESERVATION_TTL_MS = 10 * 60 * 1_000;
 
+/**
+ * Engagement de-duplication windows. Both are enforced by pruning inside the
+ * admission transaction, so a long-running deployment needs no cleanup job.
+ *
+ * A view is unique per IP/post/day, so yesterday's rows can never match again;
+ * two days of slack covers clock skew and a day-offset change. A reaction is
+ * unique per IP/post with no natural expiry, so it gets a long — but finite —
+ * retention: the table must not grow without bound on an always-on process.
+ */
+export const ENGAGEMENT_VIEW_RETENTION_MS = 2 * DAY_MS;
+export const ENGAGEMENT_REACTION_RETENTION_MS = 90 * DAY_MS;
+
+/**
+ * Day boundary used for the "one view per IP/post/day" rule. UTC would roll the
+ * counter over at 09:00 local time for the site's Korean readers, so the
+ * default is KST (+09:00); callers may pass another offset.
+ */
+export const DEFAULT_DAY_OFFSET_MINUTES = 9 * 60;
+
+export function engagementDayKey(atMs: number, dayOffsetMinutes = DEFAULT_DAY_OFFSET_MINUTES): string {
+  return new Date(atMs + dayOffsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
 export type ChatQuotaReservation =
   | { ok: true; reservationId?: string }
   | { ok: false; reason: "global" | "ip" | "concurrency" };
+
+/**
+ * Namespaced digest of a client address. The database never stores the source
+ * address, while the same address still maps to a stable key across restarts
+ * and across server processes sharing the file.
+ */
+function hashIp(namespace: string, ip: string): string {
+  return createHash("sha256")
+    .update(`${namespace}\0`)
+    .update(ip.trim().toLowerCase() || "unknown")
+    .digest("hex");
+}
 
 export interface Paper {
   id: number;
@@ -141,6 +176,15 @@ CREATE TABLE IF NOT EXISTS post_stats (
   views INTEGER NOT NULL DEFAULT 0,
   reactions INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS engagement_events (
+  kind TEXT NOT NULL CHECK(kind IN ('view', 'react')),
+  ip_hash TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  day_key TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (kind, ip_hash, slug, day_key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_engagement_kind_time ON engagement_events(kind, created_at_ms);
 CREATE TABLE IF NOT EXISTS subscribers (
   email TEXT PRIMARY KEY,
   created_at TEXT DEFAULT (datetime('now'))
@@ -409,6 +453,63 @@ export class Store {
     return row ?? { views: 0, reactions: 0 };
   }
 
+  /**
+   * Drop de-duplication rows that can no longer suppress anything. Called from
+   * inside the admission transaction (same design as the chat quota table) so
+   * an always-on process stays bounded without a maintenance job.
+   */
+  private pruneEngagementEvents(atMs: number): void {
+    this.db.prepare(
+      `DELETE FROM engagement_events
+       WHERE (kind='view' AND created_at_ms < ?)
+          OR (kind='react' AND created_at_ms < ?)`
+    ).run(atMs - ENGAGEMENT_VIEW_RETENTION_MS, atMs - ENGAGEMENT_REACTION_RETENTION_MS);
+  }
+
+  /**
+   * Count one view unless this IP already viewed this post today. Admission and
+   * the counter bump share one transaction, so two concurrent requests (or two
+   * server processes) cannot both inflate the count.
+   */
+  recordView(
+    ip: string,
+    slug: string,
+    at = Date.now(),
+    dayOffsetMinutes = DEFAULT_DAY_OFFSET_MINUTES
+  ): { counted: boolean; views: number; reactions: number } {
+    const timestamp = Number.isFinite(at) ? Math.trunc(at) : Date.now();
+    const ipHash = hashIp("arxiblog-engagement:v1", ip);
+    const dayKey = engagementDayKey(timestamp, dayOffsetMinutes);
+
+    const record = this.db.transaction((): { counted: boolean; views: number; reactions: number } => {
+      this.pruneEngagementEvents(timestamp);
+      const inserted = this.db.prepare(
+        `INSERT OR IGNORE INTO engagement_events (kind, ip_hash, slug, day_key, created_at_ms)
+         VALUES ('view', ?, ?, ?, ?)`
+      ).run(ipHash, slug, dayKey, timestamp);
+      if (inserted.changes > 0) this.incrementView(slug);
+      return { counted: inserted.changes > 0, ...this.getStats(slug) };
+    });
+    return record.immediate();
+  }
+
+  /** Count one reaction unless this IP already reacted to this post. */
+  recordReaction(ip: string, slug: string, at = Date.now()): { counted: boolean; reactions: number } {
+    const timestamp = Number.isFinite(at) ? Math.trunc(at) : Date.now();
+    const ipHash = hashIp("arxiblog-engagement:v1", ip);
+
+    const record = this.db.transaction((): { counted: boolean; reactions: number } => {
+      this.pruneEngagementEvents(timestamp);
+      const inserted = this.db.prepare(
+        `INSERT OR IGNORE INTO engagement_events (kind, ip_hash, slug, day_key, created_at_ms)
+         VALUES ('react', ?, ?, '', ?)`
+      ).run(ipHash, slug, timestamp);
+      if (inserted.changes > 0) this.incrementReaction(slug);
+      return { counted: inserted.changes > 0, reactions: this.getStats(slug).reactions };
+    });
+    return record.immediate();
+  }
+
   // --- Newsletter subscribers ---
 
   addSubscriber(email: string): void {
@@ -444,11 +545,7 @@ export class Store {
     const timestamp = Number.isFinite(at) ? Math.trunc(at) : Date.now();
     // Namespace the digest so the database never stores the source address and
     // the same address maps consistently across restarts and server processes.
-    const normalizedIp = ip.trim().toLowerCase() || "unknown";
-    const ipHash = createHash("sha256")
-      .update("arxiblog-chat-quota:v1\0")
-      .update(normalizedIp)
-      .digest("hex");
+    const ipHash = hashIp("arxiblog-chat-quota:v1", ip);
     const reservationId = randomUUID();
     const dayStart = Math.floor(timestamp / DAY_MS) * DAY_MS;
     const hourStart = timestamp - HOUR_MS;
