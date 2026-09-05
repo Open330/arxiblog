@@ -17,6 +17,10 @@
     }
   }
 
+  // Diagrams rendered at build time are already SVG: no library to load, just
+  // wrap them in the same pan/zoom viewport.
+  document.querySelectorAll(".mermaid-figure").forEach(enhanceMermaid);
+
   const diagrams = document.querySelectorAll("pre.mermaid");
   if (diagrams.length && window.mermaid) {
     const dark = document.documentElement.dataset.theme === "dark" ||
@@ -39,18 +43,26 @@
   // Wrap a rendered Mermaid <svg> in a fit-to-width, pan/zoom viewport (à la
   // GitHub) so large diagrams no longer blow out the page layout. Degrades to the
   // raw source when rendering failed (no <svg>).
-  function enhanceMermaid(pre) {
-    const svg = pre.querySelector("svg");
-    if (!svg || !pre.parentNode) return;
-    const vb = svg.viewBox && svg.viewBox.baseVal;
-    const rect = svg.getBoundingClientRect();
+  //
+  // `source` is either a <pre class="mermaid"> the library just rendered into, or
+  // a build-time .mermaid-figure holding one SVG per colour scheme. Both SVGs of
+  // a pre-rendered pair share the same geometry, so a single viewport fits them
+  // and CSS alone decides which one is visible after a theme switch.
+  function enhanceMermaid(source) {
+    const svgs = source.querySelectorAll("svg");
+    if (!svgs.length || !source.parentNode) return;
+    const first = svgs[0];
+    const vb = first.viewBox && first.viewBox.baseVal;
+    const rect = first.getBoundingClientRect();
     const natW = (vb && vb.width) || rect.width || 800;
     const natH = (vb && vb.height) || rect.height || 480;
-    svg.removeAttribute("width");
-    svg.removeAttribute("height");
-    svg.style.width = natW + "px";
-    svg.style.height = natH + "px";
-    svg.style.maxWidth = "none";
+    svgs.forEach(function (svg) {
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      svg.style.width = natW + "px";
+      svg.style.height = natH + "px";
+      svg.style.maxWidth = "none";
+    });
 
     const viewport = document.createElement("div");
     viewport.className = "mermaid-viewport";
@@ -72,12 +84,14 @@
     hint.className = "mermaid-hint";
     hint.textContent = "스크롤로 확대 · 드래그로 이동";
 
-    pre.parentNode.insertBefore(viewport, pre);
-    canvas.appendChild(svg);
+    source.parentNode.insertBefore(viewport, source);
+    // A <pre> contributes only its single SVG; a pre-rendered figure moves in
+    // whole so its per-theme wrappers (and their CSS) survive.
+    if (source.classList.contains("mermaid-figure")) canvas.appendChild(source);
+    else { canvas.appendChild(svgs[0]); source.remove(); }
     viewport.appendChild(canvas);
     viewport.appendChild(controls);
     viewport.appendChild(hint);
-    pre.remove();
 
     let scale = 1, tx = 0, ty = 0, fit = 1;
     const clamp = function (v, lo, hi) { return Math.max(lo, Math.min(hi, v)); };

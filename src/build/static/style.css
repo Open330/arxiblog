@@ -700,6 +700,46 @@ body.chat-open { overflow: hidden; }
 }
 
 
+/* A diagram Mermaid could not parse: show the source, not a blank space. */
+.post-body .mermaid-unavailable {
+  margin: 22px 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+.post-body .mermaid-unavailable figcaption {
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.post-body .mermaid-unavailable pre { margin: 0; }
+
+/* ── Home pagination ── */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 28px 0 4px;
+}
+.pager[hidden] { display: none; }
+.pager-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.pager-link:hover { background: var(--surface-2); }
+.pager-link.is-disabled { opacity: 0.4; pointer-events: none; }
+.pager-status { font-size: 0.9rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
 /* ── Mermaid diagram viewport: fit-to-width with pan/zoom (GitHub-style) ── */
 .post-body .mermaid-viewport {
   position: relative;
@@ -722,6 +762,31 @@ body.chat-open { overflow: hidden; }
   will-change: transform;
 }
 .mermaid-canvas svg { display: block; }
+
+/* Build-time diagrams ship one SVG per colour scheme (identical geometry); CSS
+   alone reveals the matching one, so a theme switch needs no JavaScript and no
+   mermaid.js. Light is the default, matching the light-first palette above. */
+.mermaid-figure { display: block; }
+.mermaid-figure > .mermaid-theme-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mermaid-figure > .mermaid-theme-light { display: none; }
+  :root:not([data-theme="light"]) .mermaid-figure > .mermaid-theme-dark { display: block; }
+}
+:root[data-theme="dark"] .mermaid-figure > .mermaid-theme-light { display: none; }
+:root[data-theme="dark"] .mermaid-figure > .mermaid-theme-dark { display: block; }
+:root[data-theme="light"] .mermaid-figure > .mermaid-theme-light { display: block; }
+:root[data-theme="light"] .mermaid-figure > .mermaid-theme-dark { display: none; }
+/* Before rich.js wraps it in a viewport (or with JS off) the figure still has to
+   stay inside the column. */
+.post-body > .mermaid-figure {
+  margin: 22px 0;
+  padding: 22px;
+  overflow-x: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.post-body > .mermaid-figure svg { max-width: 100%; height: auto; }
 .mermaid-controls {
   position: absolute;
   top: 8px;

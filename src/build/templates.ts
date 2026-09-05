@@ -22,6 +22,11 @@ interface HeadOptions {
   htmlLang?: string;
   /** hreflang alternate links (KO/EN + x-default). */
   alternates?: Array<{ hreflang: string; href: string }>;
+  /** Paginated listing neighbours. */
+  prevUrl?: string;
+  nextUrl?: string;
+  /** Structured data, already serialized by jsonForScript. */
+  jsonLd?: string;
 }
 
 export function safePublicUrl(base: string | undefined, relativePath = ""): string {
@@ -87,6 +92,8 @@ function head(title: string, description: string, opts: HeadOptions = {}): strin
 ${opts.siteName ? `<meta property="og:site_name" content="${escapeHtml(opts.siteName)}">` : ""}
 ${alternates}
 ${canonicalUrl ? `<meta property="og:url" content="${escapeHtml(canonicalUrl)}">\n<link rel="canonical" href="${escapeHtml(canonicalUrl)}">` : ""}
+${opts.prevUrl ? `<link rel="prev" href="${escapeHtml(opts.prevUrl)}">` : ""}
+${opts.nextUrl ? `<link rel="next" href="${escapeHtml(opts.nextUrl)}">` : ""}
 ${ogImage ? `<meta property="og:image" content="${escapeHtml(ogImage)}">\n<meta name="twitter:card" content="summary_large_image">` : `<meta name="twitter:card" content="summary">`}
 ${opts.noindex ? `<meta name="robots" content="noindex,nofollow">` : ""}
 <link rel="icon" href="${assetPrefix}favicon.svg" type="image/svg+xml">
@@ -95,7 +102,19 @@ ${opts.noindex ? `<meta name="robots" content="noindex,nofollow">` : ""}
 ${opts.mathContent ? `<link rel="stylesheet" href="${assetPrefix}static/vendor/katex/katex.min.css">` : ""}
 <link rel="stylesheet" href="${assetPrefix}static/style.css">
 <script>(function(){try{var t=localStorage.getItem("arxiblog-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+${opts.jsonLd ? `<script type="application/ld+json">${opts.jsonLd}</script>` : ""}
 </head>`;
+}
+
+/** Drop empty values so structured data never advertises a blank field. */
+function compactJsonLd<T extends Record<string, unknown>>(node: T): T {
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
+      delete node[key];
+    }
+  }
+  return node;
 }
 
 function siteHeader(homeHref: string, siteName: string): string {
@@ -107,11 +126,23 @@ function siteHeader(homeHref: string, siteName: string): string {
 </header>`;
 }
 
-function clientScripts(annotJson: string, assetPrefix: string, hasMath: boolean, hasMermaid: boolean, loadKatex = false): string {
+/**
+ * @param needsMermaidRuntime a diagram could not be pre-rendered at build time,
+ *   so this page still has to download mermaid.js (~3.4 MB). Pages whose
+ *   diagrams are inlined as SVG only load rich.js for the pan/zoom viewport.
+ */
+function clientScripts(
+  annotJson: string,
+  assetPrefix: string,
+  hasMath: boolean,
+  hasMermaid: boolean,
+  loadKatex = false,
+  needsMermaidRuntime = false
+): string {
   const richScripts = [
     (hasMath || loadKatex) ? `<script defer src="${assetPrefix}static/vendor/katex/katex.min.js"></script>
 <script defer src="${assetPrefix}static/vendor/katex/auto-render.min.js"></script>` : "",
-    hasMermaid ? `<script defer src="${assetPrefix}static/vendor/mermaid/mermaid.min.js"></script>` : "",
+    needsMermaidRuntime ? `<script defer src="${assetPrefix}static/vendor/mermaid/mermaid.min.js"></script>` : "",
     hasMath || hasMermaid ? `<script defer src="${assetPrefix}static/rich.js"></script>` : "",
   ].filter(Boolean).join("\n");
   return `<script>window.__ARXIBLOG_ANNOTATIONS__ = ${annotJson};</script>
@@ -129,6 +160,8 @@ export function renderPostPage(opts: {
   annotations: Annotation[];
   hasMath?: boolean;
   hasMermaid?: boolean;
+  /** A diagram fell back to runtime rendering, so mermaid.js must be loaded. */
+  needsMermaidRuntime?: boolean;
   related?: Array<{ slug: string; title: string; arxiv_id?: string; reading_minutes?: number }>;
   /** Absolute URL of this post's Open Graph image; "" or absent omits og:image. */
   ogImage?: string;
@@ -331,6 +364,30 @@ export function renderPostPage(opts: {
         ]
       : [];
 
+  // Structured data: a blog post derived from (isBasedOn) the arXiv paper.
+  // Values go through jsonForScript, which neutralises </script> and the JS line
+  // separators, so author text can never break out of the element.
+  const organization = { "@type": "Organization", name: opts.config.project.name };
+  const jsonLd = jsonForScript(
+    compactJsonLd({
+      "@context": "https://schema.org",
+      "@type": "BlogPosting",
+      headline: displayTitle,
+      description,
+      inLanguage: isEn ? "en" : "ko",
+      datePublished: post.created_at || "",
+      dateModified: post.reviewed_at || post.created_at || "",
+      author: organization,
+      publisher: organization,
+      image: opts.ogImage || "",
+      url: canonicalUrl,
+      mainEntityOfPage: canonicalUrl ? { "@type": "WebPage", "@id": canonicalUrl } : undefined,
+      isBasedOn: arxivId ? absUrl : "",
+      keywords: cats,
+      timeRequired: post.reading_minutes ? `PT${post.reading_minutes}M` : "",
+    })
+  );
+
   const chatEnabled = opts.config?.chat?.enabled !== false;
   const loadKatex = !!opts.hasMath || chatEnabled;
   return `${head(`${displayTitle} · ${opts.config.project.name}`, description, {
@@ -342,6 +399,7 @@ export function renderPostPage(opts: {
     ogImage: opts.ogImage,
     htmlLang: isEn ? "en" : "ko",
     alternates,
+    jsonLd,
   })}
 <body data-slug="${escapeHtml(post.slug)}">
 <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
@@ -417,23 +475,59 @@ ${siteHeader("../", opts.config.project.name)}
   </form>
 </section>
 
-${clientScripts(annotJson, "../", !!opts.hasMath, !!opts.hasMermaid, loadKatex)}
+${clientScripts(annotJson, "../", !!opts.hasMath, !!opts.hasMermaid, loadKatex, !!opts.needsMermaidRuntime)}
 </body>
 </html>`;
 }
 
 // ── Index page ──
 
-export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] }): string {
+/** Posts listed per home page; the rest move to /page/2.html, /page/3.html … */
+export const POSTS_PER_PAGE = 12;
+
+export function homePageCount(total: number): number {
+  return Math.max(1, Math.ceil(total / POSTS_PER_PAGE));
+}
+
+/**
+ * Site-relative href of home page `n`, resolved from page `from`.
+ * Page 1 keeps the bare directory URL so the canonical home never gains a suffix.
+ */
+function homePageHref(n: number, from: number): string {
+  if (from === 1) return n === 1 ? "./" : `page/${n}.html`;
+  return n === 1 ? "../" : `${n}.html`;
+}
+
+/**
+ * Render one page of the home listing.
+ *
+ * `posts` is always the complete, ordered corpus: the page slices out its own
+ * cards but still needs the full set for the total count, the category chips and
+ * the ItemList positions. Client-side search reaches the posts that are not on
+ * this page through posts.json (see app.js).
+ */
+export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[]; page?: number }): string {
   const { config, posts } = opts;
-  const canonicalUrl = safePublicUrl(config.project.url);
-  const cards = posts
+  const totalPages = homePageCount(posts.length);
+  const page = Math.min(Math.max(1, Math.floor(opts.page || 1)), totalPages);
+  const offset = (page - 1) * POSTS_PER_PAGE;
+  const pagePosts = posts.slice(offset, offset + POSTS_PER_PAGE);
+  // Page 2+ lives one directory deep, so every root-relative reference shifts.
+  const prefix = page === 1 ? "" : "../";
+  const canonicalUrl =
+    page === 1 ? safePublicUrl(config.project.url) : safePublicUrl(config.project.url, `page/${page}.html`);
+  const absoluteOrRelative = (n: number): string => {
+    const absolute = n === 1 ? safePublicUrl(config.project.url) : safePublicUrl(config.project.url, `page/${n}.html`);
+    return absolute || homePageHref(n, page);
+  };
+
+  const cards = pagePosts
     .map((p) => {
       const cats = splitCategories(p.categories).slice(0, 3);
       const haystack = `${p.title} ${p.subtitle} ${p.tldr} ${p.categories || ""} ${p.arxiv_id || ""}`
         .toLowerCase();
       const cardCats = splitCategories(p.categories).map((c) => c.toLowerCase()).join(" ");
-      return `<a class="card" href="p/${encodeURIComponent(p.slug)}.html" data-search="${escapeHtml(haystack)}" data-cats="${escapeHtml(cardCats)}">
+      return `<a class="card" href="${prefix}p/${encodeURIComponent(p.slug)}.html" data-search="${escapeHtml(haystack)}" data-cats="${escapeHtml(cardCats)}">
         <div class="card-meta">
           ${cats.map((c) => `<span class="cat">${escapeHtml(c)}</span>`).join("")}
           <span class="card-time">${p.reading_minutes}분</span>
@@ -451,7 +545,8 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
     <p class="empty-hint"><code>arxiblog add 2605.31264</code> 처럼 arXiv 논문을 추가해 보세요.</p>
   </div>`;
 
-  // Category filter chips (top categories by frequency).
+  // Category filter chips (top categories by frequency across the whole corpus,
+  // so the chips do not change from page to page).
   const catCounts = new Map<string, number>();
   for (const p of posts) for (const c of splitCategories(p.categories)) catCounts.set(c, (catCounts.get(c) || 0) + 1);
   const topCats = [...catCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c]) => c);
@@ -464,13 +559,60 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[] })
         </div>`
       : "";
 
-  return `${head(config.project.name, config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로", {
-    canonicalUrl,
-    siteName: config.project.name,
-  })}
+  const pageLink = (n: number, label: string, rel: string, cls: string): string =>
+    `<a class="pager-link ${cls}" href="${escapeHtml(homePageHref(n, page))}"${rel ? ` rel="${rel}"` : ""}>${escapeHtml(label)}</a>`;
+  const pager =
+    totalPages > 1
+      ? `<nav class="pager" aria-label="글 목록 페이지">
+          ${page > 1 ? pageLink(page - 1, "← 이전", "prev", "pager-prev") : `<span class="pager-link pager-prev is-disabled" aria-hidden="true">← 이전</span>`}
+          <span class="pager-status" role="status">${page} / ${totalPages}</span>
+          ${page < totalPages ? pageLink(page + 1, "다음 →", "next", "pager-next") : `<span class="pager-link pager-next is-disabled" aria-hidden="true">다음 →</span>`}
+        </nav>`
+      : "";
+
+  // Blog + ItemList structured data. Positions are absolute within the corpus, so
+  // page 2 continues where page 1 stopped rather than restarting at 1.
+  const homeUrl = safePublicUrl(config.project.url);
+  const jsonLd = jsonForScript([
+    compactJsonLd({
+      "@context": "https://schema.org",
+      "@type": "Blog",
+      name: config.project.name,
+      description: config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로",
+      inLanguage: "ko",
+      url: homeUrl,
+    }),
+    compactJsonLd({
+      "@context": "https://schema.org",
+      "@type": "ItemList",
+      name: config.project.name,
+      numberOfItems: posts.length,
+      itemListElement: pagePosts.map((p, index) =>
+        compactJsonLd({
+          "@type": "ListItem",
+          position: offset + index + 1,
+          name: p.title,
+          url: safePublicUrl(config.project.url, `p/${encodeURIComponent(p.slug)}.html`),
+        })
+      ),
+    }),
+  ]);
+
+  return `${head(
+    page === 1 ? config.project.name : `${config.project.name} · ${page}페이지`,
+    config.project.tagline || "arXiv 논문을 읽기 쉬운 블로그로",
+    {
+      assetPrefix: prefix,
+      canonicalUrl,
+      siteName: config.project.name,
+      prevUrl: page > 1 ? absoluteOrRelative(page - 1) : "",
+      nextUrl: page < totalPages ? absoluteOrRelative(page + 1) : "",
+      jsonLd,
+    }
+  )}
 <body>
 <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
-${siteHeader("./", config.project.name)}
+${siteHeader(homePageHref(1, page), config.project.name)}
 <main id="main-content" class="home">
   <section class="home-hero" aria-labelledby="home-title">
     <span class="hero-badge">arXiv → 읽고 싶은 글</span>
@@ -489,11 +631,12 @@ ${siteHeader("./", config.project.name)}
       ${posts.length ? `<input id="post-search" class="post-search" type="search" placeholder="제목·요약·분야 검색…" aria-label="글 검색" aria-controls="cards search-status search-empty" autocomplete="off" enterkeyhint="search">` : ""}
     </div>
     ${catFilter}
-    <div class="cards" id="cards" aria-labelledby="post-list-title">
-      ${posts.length ? cards : empty}
+    <div class="cards" id="cards" aria-labelledby="post-list-title" data-post-index="${prefix}posts.json" data-post-base="${prefix}p/">
+      ${pagePosts.length ? cards : empty}
     </div>
     <p id="search-status" class="search-status" role="status" aria-live="polite" aria-atomic="true"></p>
     <p id="search-empty" class="search-empty" hidden aria-hidden="true">검색 결과가 없습니다. 다른 검색어를 입력해 보세요.</p>
+    ${pager}
   </section>
 </main>
 <section class="subscribe" aria-labelledby="subscribe-title">
@@ -509,7 +652,7 @@ ${siteHeader("./", config.project.name)}
   </div>
 </section>
 <footer class="site-footer">arxiblog · arXiv 논문을 사람의 언어로</footer>
-<script defer src="static/app.js"></script>
+<script defer src="${prefix}static/app.js"></script>
 </body>
 </html>`;
 }

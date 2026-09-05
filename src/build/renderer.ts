@@ -13,9 +13,22 @@ import { marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 import { resolveBuildOutputDir, type ArxiblogConfig } from "../config";
 import type { Store, Annotation } from "../store";
-import { renderPostPage, renderIndexPage, renderNotFoundPage, safePublicUrl } from "./templates";
+import {
+  renderPostPage,
+  renderIndexPage,
+  renderNotFoundPage,
+  safePublicUrl,
+  homePageCount,
+} from "./templates";
 import { renderFeed } from "./feed";
 import { writeOgImages, ogPngEnabled } from "./og";
+import { prepareFonts } from "./fonts";
+import {
+  prerenderMermaid,
+  mermaidPrerenderEnabled,
+  type MermaidPrerender,
+  type PrerenderedDiagram,
+} from "./mermaid";
 import { escapeHtml, splitCategories, repairMathDelimiters } from "../utils";
 
 function normalizeTerm(s: string): string {
@@ -23,6 +36,27 @@ function normalizeTerm(s: string): string {
 }
 
 export type BuildStore = Pick<Store, "listPosts" | "getAnnotations">;
+
+interface EnglishPost {
+  title: string;
+  subtitle: string;
+  tldr: string;
+  takeaways: string[];
+  content: string;
+  who_should_read: string;
+}
+
+/** The stored English translation, or null when it is absent or malformed. */
+function englishPayload(post: { translation_en?: string }): EnglishPost | null {
+  const raw = post.translation_en;
+  if (!raw || !raw.trim()) return null;
+  try {
+    const data = JSON.parse(raw) as EnglishPost;
+    return data?.content?.trim() ? data : null;
+  } catch {
+    return null;
+  }
+}
 
 function dependencyAsset(specifier: string): string {
   try {
@@ -45,21 +79,12 @@ function dependencyLicense(packageName: string): string {
  */
 function copyVendorAssets(staticDir: string, needs: { math: boolean; mermaid: boolean }): void {
   const vendorDir = join(staticDir, "vendor");
-  const pretendardDir = join(vendorDir, "pretendard");
-  mkdirSync(pretendardDir, { recursive: true });
 
-  // Regular + bold cover the UI's body and emphasis/headline use without
-  // shipping nine near-800 KB static faces. Intermediate weights map to the
-  // nearest local face, while the system stack remains a no-JS fallback.
-  copyFileSync(
-    dependencyAsset("@fontsource/pretendard/files/pretendard-latin-400-normal.woff2"),
-    join(pretendardDir, "Pretendard-Regular.woff2")
-  );
-  copyFileSync(
-    dependencyAsset("@fontsource/pretendard/files/pretendard-latin-700-normal.woff2"),
-    join(pretendardDir, "Pretendard-Bold.woff2")
-  );
-  copyFileSync(dependencyLicense("@fontsource/pretendard"), join(pretendardDir, "LICENSE.txt"));
+  // Fonts own their own copy step: upstream ships Pretendard pre-split into
+  // unicode-range chunks, so a reader downloads only the chunks their text
+  // needs instead of the two ~750 KB full faces. Falls back to those faces when
+  // the split package is absent.
+  prepareFonts(staticDir);
 
   if (needs.math) {
     const katexDir = join(vendorDir, "katex");
@@ -96,8 +121,10 @@ function copyVendorAssets(staticDir: string, needs: { math: boolean; mermaid: bo
     copyFileSync(dependencyLicense("katex"), join(katexDir, "LICENSE.txt"));
   }
 
-  // The classic build is a single self-contained browser bundle. The smaller
-  // ESM entry imports more than 200 chunks, so copying it alone is not offline.
+  // Only reached when a diagram could not be pre-rendered at build time (no
+  // Playwright, or a diagram mermaid itself refused). The classic build is a
+  // single self-contained browser bundle; the smaller ESM entry imports more
+  // than 200 chunks, so copying it alone is not offline.
   if (needs.mermaid) {
     const mermaidDir = join(vendorDir, "mermaid");
     mkdirSync(mermaidDir, { recursive: true });
@@ -134,7 +161,48 @@ function findAnnotation(map: Map<string, Annotation>, list: Annotation[], term: 
 interface RenderedPostBody {
   html: string;
   hasMath: boolean;
+  /** The page has a live diagram (inline SVG or runtime) worth loading rich.js for. */
   hasMermaid: boolean;
+  /** At least one diagram fell back to <pre class="mermaid"> and needs mermaid.js. */
+  needsMermaidRuntime: boolean;
+  /** Sources Mermaid itself rejected; the caller reports them against a slug. */
+  failedDiagrams: string[];
+}
+
+/**
+ * A pre-rendered diagram ships both colour schemes; CSS reveals the one that
+ * matches the reader's theme, so a build-time SVG stays legible after a runtime
+ * theme switch without any JavaScript. Both SVGs share identical geometry, so
+ * rich.js can still fit-to-width and pan/zoom the pair as one canvas.
+ */
+function prerenderedDiagramHtml(diagram: PrerenderedDiagram): string {
+  return (
+    `<div class="mermaid-figure" data-mermaid="prerendered">` +
+    `<div class="mermaid-theme mermaid-theme-light">${diagram.light}</div>` +
+    `<div class="mermaid-theme mermaid-theme-dark">${diagram.dark}</div>` +
+    `</div>`
+  );
+}
+
+/**
+ * A diagram Mermaid refused to parse. It would fail in the reader's browser in
+ * exactly the same way, so the page shows the source instead of downloading a
+ * 3.4 MB renderer that cannot help either.
+ */
+function unrenderableDiagramHtml(source: string): string {
+  return (
+    `<figure class="mermaid-unavailable">` +
+    `<figcaption>도식을 표시할 수 없습니다 — 원본 Mermaid 코드입니다.</figcaption>` +
+    `<pre><code class="language-mermaid">${escapeHtml(source)}</code></pre>` +
+    `</figure>`
+  );
+}
+
+/** Mermaid sources in a document, in order, for the build-time pre-render pass. */
+export function extractMermaidSources(markdown: string): string[] {
+  const blocks: string[] = [];
+  protectFencedBlocks(markdown, "MERMAIDSCAN", blocks, []);
+  return blocks.map((block) => block.trim()).filter(Boolean);
 }
 
 function protectFencedBlocks(
@@ -190,7 +258,11 @@ function protectFencedBlocks(
   return output.join("\n");
 }
 
-async function renderPostBodyWithAssets(content: string, annotations: Annotation[]): Promise<RenderedPostBody> {
+async function renderPostBodyWithAssets(
+  content: string,
+  annotations: Annotation[],
+  prerender?: MermaidPrerender
+): Promise<RenderedPostBody> {
   const annotMap = new Map<string, Annotation>();
   for (const a of annotations) annotMap.set(normalizeTerm(a.term), a);
 
@@ -289,17 +361,40 @@ async function renderPostBodyWithAssets(content: string, annotations: Annotation
     escapeHtml(mathPlaceholders[parseInt(idx, 10)] || "")
   );
 
-  // Restore mermaid diagrams after sanitize. The source is HTML-escaped so no raw
-  // tag reaches the DOM; mermaid.js reads textContent (entities decoded) to render.
+  // Restore mermaid diagrams after sanitize. Three outcomes, and the difference
+  // between the last two is what keeps one broken diagram from costing the whole
+  // site 3.4 MB:
+  //   1. rendered at build time      → inline SVG, no library
+  //   2. Mermaid rejected the source → static fallback, no library (it would fail
+  //                                    in the browser too, so the library is dead
+  //                                    weight)
+  //   3. the pass could not run      → <pre class="mermaid">, load the library
+  let needsMermaidRuntime = false;
+  let liveDiagrams = 0;
+  const failedDiagrams: string[] = [];
   html = html.replace(new RegExp(`(?:<p>\\s*)?%%${tokenNamespace}MERMAID(\\d+)%%(?:\\s*<\\/p>)?`, "g"), (_m, idx) => {
-    const body = mermaidBlocks[parseInt(idx, 10)] || "";
-    return body.trim() ? `<pre class="mermaid">${escapeHtml(body.trim())}</pre>` : "";
+    const body = (mermaidBlocks[parseInt(idx, 10)] || "").trim();
+    if (!body) return "";
+    const prerendered = prerender?.diagrams.get(body);
+    if (prerendered) {
+      liveDiagrams += 1;
+      return prerenderedDiagramHtml(prerendered);
+    }
+    if (prerender?.available) {
+      failedDiagrams.push(body);
+      return unrenderableDiagramHtml(body);
+    }
+    needsMermaidRuntime = true;
+    liveDiagrams += 1;
+    return `<pre class="mermaid">${escapeHtml(body)}</pre>`;
   });
 
   return {
     html,
     hasMath: mathPlaceholders.length > 0,
-    hasMermaid: mermaidBlocks.some((body) => body.trim().length > 0),
+    hasMermaid: liveDiagrams > 0,
+    needsMermaidRuntime,
+    failedDiagrams,
   };
 }
 
@@ -383,7 +478,7 @@ async function renderSiteInto(
 
   const posts = store.listPosts();
   let siteHasMath = false;
-  let siteHasMermaid = false;
+  let siteNeedsMermaidRuntime = false;
   // Precompute each post's category Set once (avoids O(n^2) re-splitting in the loop).
   const catSets = new Map<string, Set<string>>();
   for (const p of posts) catSets.set(p.slug, new Set(splitCategories(p.categories)));
@@ -414,13 +509,41 @@ async function renderSiteInto(
   // not one per post — the per-post launch blew build/test timeouts).
   const ogPaths = await writeOgImages(posts, config, ogDir, ogPngEnabled());
 
+  // Render every diagram in the site once, up front, with a single browser. The
+  // result replaces a ~3.4 MB per-page mermaid.min.js download with inline SVG;
+  // anything left unrendered keeps the runtime fallback.
+  const diagramSources: string[] = [];
+  for (const post of posts) {
+    diagramSources.push(...extractMermaidSources(post.content));
+    const translated = englishPayload(post);
+    if (translated) diagramSources.push(...extractMermaidSources(translated.content));
+  }
+  const prerender: MermaidPrerender = mermaidPrerenderEnabled()
+    ? await prerenderMermaid(diagramSources)
+    : { available: false, diagrams: new Map(), failures: new Map() };
+
+  /**
+   * Surface diagrams Mermaid rejected. They used to fail silently in the reader's
+   * browser, so an operator never learned the source was broken.
+   */
+  const reportFailedDiagrams = (slug: string, sources: string[]): void => {
+    for (const source of sources) {
+      const firstLine = source.split("\n")[0].trim().slice(0, 80);
+      const reason = prerender.failures.get(source) || "다이어그램을 렌더링하지 못했습니다.";
+      console.warn(
+        `⚠ 도식을 렌더링하지 못했습니다 (p/${slug}.html): ${reason}\n   원본 첫 줄: ${firstLine}`
+      );
+    }
+  };
+
   for (const post of posts) {
     const annotations = store.getAnnotations(post.id);
     const toc = generateToc(post.content);
-    const renderedBody = await renderPostBodyWithAssets(post.content, annotations);
+    const renderedBody = await renderPostBodyWithAssets(post.content, annotations, prerender);
     const bodyHtml = injectHeadingIds(renderedBody.html, toc);
     siteHasMath ||= renderedBody.hasMath;
-    siteHasMermaid ||= renderedBody.hasMermaid;
+    siteNeedsMermaidRuntime ||= renderedBody.needsMermaidRuntime;
+    reportFailedDiagrams(post.slug, renderedBody.failedDiagrams);
 
     // Related: IDF-weighted shared categories + shared title/TL;DR tokens, so the
     // closest topics rank first and every post surfaces up to three neighbours
@@ -446,8 +569,8 @@ async function renderSiteInto(
 
     const ogPath = ogPaths.get(post.slug) ?? "";
     const ogImage = ogBase && ogPath ? `${ogBase}${ogPath}` : "";
-    const rawEn = (post as { translation_en?: string }).translation_en;
-    const hasTranslation = !!(rawEn && rawEn.trim());
+    const enData = englishPayload(post);
+    const hasTranslation = !!enData;
 
     const html = renderPostPage({
       config,
@@ -457,6 +580,7 @@ async function renderSiteInto(
       annotations,
       hasMath: renderedBody.hasMath,
       hasMermaid: renderedBody.hasMermaid,
+      needsMermaidRuntime: renderedBody.needsMermaidRuntime,
       related,
       ogImage,
       hasTranslation,
@@ -465,31 +589,38 @@ async function renderSiteInto(
 
     // English variant page — reuses the same annotations (KO [[term]] markers are
     // preserved in the translation). Skipped if the stored JSON is malformed.
-    if (hasTranslation) {
-      try {
-        const enData = JSON.parse(rawEn!) as {
-          title: string; subtitle: string; tldr: string;
-          takeaways: string[]; content: string; who_should_read: string;
-        };
-        if (enData?.content?.trim()) {
-          const enToc = generateToc(enData.content);
-          const enRendered = await renderPostBodyWithAssets(enData.content, annotations);
-          const enBody = injectHeadingIds(enRendered.html, enToc);
-          const enHtml = renderPostPage({
-            config, post, bodyHtml: enBody, toc: enToc, annotations,
-            hasMath: enRendered.hasMath, hasMermaid: enRendered.hasMermaid,
-            ogImage, lang: "en", en: enData, hasTranslation: true,
-          });
-          await Bun.write(join(postsDir, `${post.slug}.en.html`), enHtml);
-        }
-      } catch { /* skip EN page */ }
+    if (enData) {
+      const enToc = generateToc(enData.content);
+      const enRendered = await renderPostBodyWithAssets(enData.content, annotations, prerender);
+      const enBody = injectHeadingIds(enRendered.html, enToc);
+      siteNeedsMermaidRuntime ||= enRendered.needsMermaidRuntime;
+      reportFailedDiagrams(`${post.slug}.en`, enRendered.failedDiagrams);
+      const enHtml = renderPostPage({
+        config, post, bodyHtml: enBody, toc: enToc, annotations,
+        hasMath: enRendered.hasMath, hasMermaid: enRendered.hasMermaid,
+        needsMermaidRuntime: enRendered.needsMermaidRuntime,
+        ogImage, lang: "en", en: enData, hasTranslation: true,
+      });
+      await Bun.write(join(postsDir, `${post.slug}.en.html`), enHtml);
     }
   }
 
-  copyVendorAssets(staticDir, { math: siteHasMath || config.chat?.enabled !== false, mermaid: siteHasMermaid });
+  copyVendorAssets(staticDir, {
+    math: siteHasMath || config.chat?.enabled !== false,
+    mermaid: siteNeedsMermaidRuntime,
+  });
 
-  const indexHtml = renderIndexPage({ config, posts });
-  await Bun.write(join(outputDir, "index.html"), indexHtml);
+  // The home listing is paginated so its size stops growing with the corpus;
+  // page 1 stays at /index.html and the rest land at /page/<n>.html.
+  const homePages = homePageCount(posts.length);
+  await Bun.write(join(outputDir, "index.html"), renderIndexPage({ config, posts, page: 1 }));
+  if (homePages > 1) {
+    const pageDir = join(outputDir, "page");
+    mkdirSync(pageDir, { recursive: true });
+    for (let page = 2; page <= homePages; page += 1) {
+      await Bun.write(join(pageDir, `${page}.html`), renderIndexPage({ config, posts, page }));
+    }
+  }
 
   // Search/index data for potential client use
   await Bun.write(
@@ -531,6 +662,9 @@ async function renderSiteInto(
   if (siteUrl) {
     const urls = [
       siteUrl,
+      ...Array.from({ length: homePages - 1 }, (_unused, index) =>
+        new URL(`page/${index + 2}.html`, siteUrl).href
+      ),
       ...posts.flatMap((p) => {
         const list = [new URL(`p/${encodeURIComponent(p.slug)}.html`, siteUrl).href];
         if ((p as { translation_en?: string }).translation_en?.trim()) {

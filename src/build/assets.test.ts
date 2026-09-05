@@ -29,6 +29,14 @@ function resourceReferences(html: string): string[] {
   return [...scripts, ...styles];
 }
 
+/** Every application/ld+json payload on a page, flattened. */
+function structuredData(html: string): any[] {
+  return [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].flatMap((match) => {
+    const parsed = JSON.parse(match[1]);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  });
+}
+
 function post(slug: string, content: string): Post {
   return {
     id: slug.length,
@@ -124,7 +132,13 @@ describe("offline static assets", () => {
 
     const postHtml = readFileSync(pages[2], "utf-8");
     expect(postHtml).toContain('href="../static/vendor/katex/katex.min.css"');
-    expect(postHtml).toContain('src="../static/vendor/mermaid/mermaid.min.js"');
+    // The diagram was rendered at build time, so the ~3.4 MB runtime library is
+    // neither referenced nor copied; rich.js still supplies the pan/zoom viewport.
+    expect(postHtml).not.toContain("vendor/mermaid");
+    expect(postHtml).toContain('<div class="mermaid-figure" data-mermaid="prerendered">');
+    expect(postHtml).toContain('class="mermaid-theme mermaid-theme-light"');
+    expect(postHtml).toContain('class="mermaid-theme mermaid-theme-dark"');
+    expect(postHtml).not.toContain('<pre class="mermaid">');
     expect(postHtml).toContain('src="../static/rich.js"');
     expect(postHtml).toContain("질문·최근 대화·현재 글 맥락이 설정된 외부 AI 제공자에게 전송됩니다.");
     expect(postHtml).toContain('aria-describedby="chat-privacy"');
@@ -142,30 +156,152 @@ describe("offline static assets", () => {
     const katexCss = readFileSync(katexCssPath, "utf-8");
     expect(katexCss).not.toMatch(/\.woff["')]/);
     expect(katexCss).not.toMatch(/\.ttf["')]/);
-    expect(readdirSync(join(outputDir, "static", "vendor", "mermaid")).sort()).toEqual([
-      "LICENSE.txt",
-      "mermaid.min.js",
-    ]);
+    expect(existsSync(join(outputDir, "static", "vendor", "mermaid"))).toBe(false);
 
-    // Fontsource's historical filename says "latin", but these exact artifacts
-    // are byte-identical to Pretendard 1.3.9's full upstream Korean WOFF2 faces
-    // (14,336 mapped code points, including all 11,172 modern Hangul syllables).
+    // The build ships Pretendard from its own origin in whichever form is
+    // available — unicode-range chunks when the split package is installed, the
+    // two full faces otherwise. fonts.test.ts pins the chunking itself; here the
+    // only claim is that the stylesheet the site serves is backed by real local
+    // files. The url-resolution loop above already proved every reference exists.
     const pretendardDir = join(outputDir, "static", "vendor", "pretendard");
-    const fontDigests: Record<string, string> = {
-      "Pretendard-Regular.woff2": "fad853f7f47c6c8b103171e7193fa095708cdcd70850a71d93aa5379e8a61d63",
-      "Pretendard-Bold.woff2": "4609c3356e536fafe38f4add0daeceb3d8595d3057bce13c428c33ddbd43d362",
-    };
-    for (const [fileName, expectedDigest] of Object.entries(fontDigests)) {
-      const fontPath = join(pretendardDir, fileName);
-      expect(statSync(fontPath).size).toBeGreaterThan(700_000);
-      expect(createHash("sha256").update(readFileSync(fontPath)).digest("hex")).toBe(expectedDigest);
+    const fontsCss = readFileSync(fontsCssPath, "utf-8");
+    const referenced = [...fontsCss.matchAll(/url\(["']?([^)'"]+\.woff2)["']?\)/g)].map((m) => m[1]);
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const url of referenced) {
+      expect(url).not.toMatch(/^https?:/);
+      expect(statSync(resolve(dirname(fontsCssPath), url)).size).toBeGreaterThan(0);
     }
 
     expect(readFileSync(join(pretendardDir, "LICENSE.txt"), "utf-8")).toContain("SIL OPEN FONT LICENSE");
     expect(readFileSync(join(outputDir, "static", "vendor", "katex", "LICENSE.txt"), "utf-8"))
       .toContain("The MIT License");
-    expect(readFileSync(join(outputDir, "static", "vendor", "mermaid", "LICENSE.txt"), "utf-8"))
-      .toContain("The MIT License");
+  }, 60_000);   // drives Chromium: measured 3-5s, over bun's 5s default. The
+  // pre-render pass is internally capped (see totalBudgetMs), so this ceiling
+  // only absorbs a slow cold start — it can no longer hide a hang.
+
+  test("diagrams render to inline SVG instead of shipping mermaid.js", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-mermaid-prerender-"));
+    temporaryRoots.push(root);
+    const posts = [
+      post("ok", "```mermaid\nflowchart TD\n  A[시작 지점] --> B{판단}\n```"),
+      post("broken", "```mermaid\n((( not a diagram\n```"),
+    ];
+    await buildSite(
+      { listPosts: () => posts, getAnnotations: () => [] },
+      { ...defaultConfig("Prerender"), chat: { enabled: false } },
+      root
+    );
+    const read = (slug: string) => readFileSync(join(root, "_site", "p", `${slug}.html`), "utf-8");
+
+    const ok = read("ok");
+    expect(ok).not.toContain("vendor/mermaid");
+    expect(ok).toContain("mermaid-theme-light");
+    expect(ok).toContain("mermaid-theme-dark");
+    // Both colour schemes must lay out identically so one pan/zoom viewport fits
+    // the pair and a theme switch needs no JavaScript.
+    const viewBoxes = [...ok.matchAll(/<svg[^>]*\bviewBox="([^"]+)"/g)].map((m) => m[1]);
+    expect(viewBoxes.length).toBe(2);
+    expect(viewBoxes[0]).toBe(viewBoxes[1]);
+    // The inlined SVG bypasses the Markdown sanitizer, so it must be inert.
+    const figure = ok.slice(ok.indexOf(`<div class="mermaid-figure"`), ok.indexOf("</article>"));
+    expect(figure).toContain("<svg");
+    expect(figure).not.toMatch(/<script|<foreignObject|javascript:|\son[a-z]+\s*=/i);
+
+    // A diagram mermaid itself rejects would fail in the reader's browser too, so
+    // it gets a static fallback rather than dragging the 3.4 MB library back in
+    // for the whole site.
+    const broken = read("broken");
+    expect(broken).not.toContain("vendor/mermaid");
+    expect(broken).not.toContain('<pre class="mermaid">');
+    expect(broken).toContain('<figure class="mermaid-unavailable">');
+    expect(broken).toContain("도식을 표시할 수 없습니다");
+    expect(broken).toContain("((( not a diagram");
+    // One broken diagram must not cost the other pages their saving.
+    expect(existsSync(join(root, "_site", "static", "vendor", "mermaid"))).toBe(false);
+  }, 60_000);   // drives Chromium: measured 3-5s, over bun's 5s default. The
+  // pre-render pass is internally capped (see totalBudgetMs), so this ceiling
+  // only absorbs a slow cold start — it can no longer hide a hang.
+
+  test("an unparseable diagram is reported against its slug", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-mermaid-warning-"));
+    temporaryRoots.push(root);
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      await buildSite(
+        {
+          listPosts: () => [post("gan-post", "```mermaid\nflowchart TD\n  D[판별자] <-- I\n```")],
+          getAnnotations: () => [],
+        },
+        { ...defaultConfig("Warning"), chat: { enabled: false } },
+        root
+      );
+    } finally {
+      console.warn = original;
+    }
+    const reported = warnings.filter((line) => line.includes("도식을 렌더링하지 못했습니다"));
+    expect(reported.length).toBe(1);
+    expect(reported[0]).toContain("p/gan-post.html");
+    expect(reported[0]).toContain("flowchart TD");
+    // Nothing renderable is left, so neither the library nor rich.js ships.
+    expect(existsSync(join(root, "_site", "static", "vendor", "mermaid"))).toBe(false);
+    expect(readFileSync(join(root, "_site", "p", "gan-post.html"), "utf-8")).not.toContain("static/rich.js");
+  }, 60_000);   // drives Chromium: measured 3-5s, over bun's 5s default. The
+  // pre-render pass is internally capped (see totalBudgetMs), so this ceiling
+  // only absorbs a slow cold start — it can no longer hide a hang.
+
+  test("a stalled pre-render pass degrades instead of hanging the build", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-mermaid-budget-"));
+    temporaryRoots.push(root);
+    // A budget this small guarantees the pass runs out of time. The build must
+    // still finish — a hang here would block `digest` and the live /api/add
+    // server, not just this test.
+    const previous = process.env.ARXIBLOG_MERMAID_TIMEOUT_MS;
+    process.env.ARXIBLOG_MERMAID_TIMEOUT_MS = "1";
+    const started = Date.now();
+    try {
+      await buildSite(
+        { listPosts: () => [post("stalled", "```mermaid\nflowchart TD\n  A --> B\n```")], getAnnotations: () => [] },
+        { ...defaultConfig("Budget"), chat: { enabled: false } },
+        root
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ARXIBLOG_MERMAID_TIMEOUT_MS;
+      else process.env.ARXIBLOG_MERMAID_TIMEOUT_MS = previous;
+    }
+    expect(Date.now() - started).toBeLessThan(45_000);
+    // Running out of time says nothing about the diagram, so it keeps the
+    // runtime renderer rather than being written off as broken content.
+    const html = readFileSync(join(root, "_site", "p", "stalled.html"), "utf-8");
+    expect(html).toContain('<pre class="mermaid">');
+    expect(html).not.toContain("mermaid-unavailable");
+    expect(html).toContain("vendor/mermaid/mermaid.min.js");
+    expect(existsSync(join(root, "_site", "static", "vendor", "mermaid", "mermaid.min.js"))).toBe(true);
+  }, 60_000);   // drives Chromium: measured 3-5s, over bun's 5s default. The
+  // pre-render pass is internally capped (see totalBudgetMs), so this ceiling
+  // only absorbs a slow cold start — it can no longer hide a hang.
+
+  test("ARXIBLOG_MERMAID_PRERENDER=0 falls back to the runtime renderer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-mermaid-runtime-"));
+    temporaryRoots.push(root);
+    const previous = process.env.ARXIBLOG_MERMAID_PRERENDER;
+    process.env.ARXIBLOG_MERMAID_PRERENDER = "0";
+    try {
+      await buildSite(
+        { listPosts: () => [post("runtime", "```mermaid\nflowchart TD\n  A --> B\n```")], getAnnotations: () => [] },
+        { ...defaultConfig("Runtime mermaid"), chat: { enabled: false } },
+        root
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ARXIBLOG_MERMAID_PRERENDER;
+      else process.env.ARXIBLOG_MERMAID_PRERENDER = previous;
+    }
+    const html = readFileSync(join(root, "_site", "p", "runtime.html"), "utf-8");
+    expect(html).toContain('<pre class="mermaid">');
+    expect(html).toContain("vendor/mermaid/mermaid.min.js");
+    expect(html).toContain("static/rich.js");
+    expect(existsSync(join(root, "_site", "static", "vendor", "mermaid", "mermaid.min.js"))).toBe(true);
   });
 
   test("each post loads only the rich renderer it actually needs", async () => {
@@ -175,6 +311,7 @@ describe("offline static assets", () => {
       post("plain", "가격은 $5, $10입니다. `코드 $x$ [[term]]`\n\n```ts\nconst x = '$y$ [[term]]';\n```\n\n````md\n```mermaid\nA --> B\n```\n````"),
       post("math", "인라인 $x+y$ 수식"),
       post("diagram", "~~~mermaid\nflowchart TD\n  A --> B\n~~~~"),
+      post("unparseable", "```mermaid\nflowchart TD\n  D[판별자] <-- I\n```"),
       post("both", "$$x^2$$\n\n```mermaid\nsequenceDiagram\n  A->>B: hello\n```"),
     ];
     // Disable chat so this checks the body-driven renderer selection in isolation
@@ -185,18 +322,30 @@ describe("offline static assets", () => {
     const plain = readPost("plain");
     const math = readPost("math");
     const diagram = readPost("diagram");
+    const unparseable = readPost("unparseable");
     const both = readPost("both");
 
     expect(plain).not.toContain("vendor/katex");
     expect(plain).not.toContain("vendor/mermaid");
     expect(plain).not.toContain("static/rich.js");
+    expect(plain).not.toContain("mermaid-figure");
     expect(math).toContain("vendor/katex/katex.min.js");
     expect(math).not.toContain("vendor/mermaid");
+    expect(math).not.toContain("mermaid-figure");
+    // Diagrams arrive as inline SVG; only rich.js (the pan/zoom viewport) loads.
     expect(diagram).not.toContain("vendor/katex");
-    expect(diagram).toContain("vendor/mermaid/mermaid.min.js");
-    expect(diagram.indexOf("static/app.js")).toBeLessThan(diagram.indexOf("vendor/mermaid/mermaid.min.js"));
+    expect(diagram).not.toContain("vendor/mermaid");
+    expect(diagram).toContain("mermaid-figure");
+    expect(diagram).toContain("static/rich.js");
     expect(both).toContain("vendor/katex/katex.min.js");
-    expect(both).toContain("vendor/mermaid/mermaid.min.js");
+    expect(both).not.toContain("vendor/mermaid");
+    expect(both).toContain("mermaid-figure");
+    expect(both.indexOf("static/app.js")).toBeLessThan(both.indexOf("static/rich.js"));
+    // A diagram that cannot be parsed loads neither renderer.
+    expect(unparseable).toContain("mermaid-unavailable");
+    expect(unparseable).not.toContain("vendor/mermaid");
+    expect(unparseable).not.toContain("static/rich.js");
+    expect(existsSync(join(root, "_site", "static", "vendor", "mermaid"))).toBe(false);
 
     const plainRoot = mkdtempSync(join(tmpdir(), "arxiblog-plain-assets-"));
     temporaryRoots.push(plainRoot);
@@ -221,6 +370,131 @@ describe("offline static assets", () => {
     expect(chatOnly).toContain("vendor/katex/katex.min.js");
     expect(chatOnly).not.toContain("static/rich.js");
     expect(existsSync(join(chatRoot, "_site", "static", "vendor", "katex"))).toBe(true);
+  }, 60_000);   // drives Chromium: measured 3-5s, over bun's 5s default. The
+  // pre-render pass is internally capped (see totalBudgetMs), so this ceiling
+  // only absorbs a slow cold start — it can no longer hide a hang.
+
+
+  test("post pages expose BlogPosting structured data", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-jsonld-post-"));
+    temporaryRoots.push(root);
+    const config = defaultConfig("Structured");
+    config.project.url = "https://example.test/docs";
+    const p = post("structured", "본문");
+    p.title = '제목 </script><script>alert(1)</script> & "따옴표"';
+    p.subtitle = "구조화 데이터 설명";
+    p.arxiv_id = "2106.09685v2";
+    await buildSite({ listPosts: () => [p], getAnnotations: () => [] }, config, root);
+    const html = readFileSync(join(root, "_site", "p", "structured.html"), "utf-8");
+
+    // Author text must never close the ld+json element or inject markup.
+    const raw = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    expect(raw).not.toBeNull();
+    expect(raw![1]).not.toContain("<");
+    expect(raw![1]).not.toContain(">");
+
+    const [data] = structuredData(html);
+    expect(data["@type"]).toBe("BlogPosting");
+    expect(data.headline).toBe(p.title);
+    expect(data.description).toBe("구조화 데이터 설명");
+    expect(data.datePublished).toBe("2026-01-01");
+    expect(data.author.name).toBe("Structured");
+    expect(data.isBasedOn).toBe("https://arxiv.org/abs/2106.09685v2");
+    expect(data.mainEntityOfPage["@id"]).toBe("https://example.test/docs/p/structured.html");
+    expect(data.url).toBe("https://example.test/docs/p/structured.html");
+    expect(data.image).toBe("https://example.test/docs/og/structured.svg");
+    expect(data.inLanguage).toBe("ko");
+    expect(data.keywords).toEqual(["cs.SE"]);
+    // Empty fields are dropped rather than published blank.
+    expect("dateModified" in data).toBe(true);
+    const withoutUrl = defaultConfig("No URL");
+    const otherRoot = mkdtempSync(join(tmpdir(), "arxiblog-jsonld-nourl-"));
+    temporaryRoots.push(otherRoot);
+    await buildSite({ listPosts: () => [post("plain", "본문")], getAnnotations: () => [] }, withoutUrl, otherRoot);
+    const [bare] = structuredData(readFileSync(join(otherRoot, "_site", "p", "plain.html"), "utf-8"));
+    expect("mainEntityOfPage" in bare).toBe(false);
+    expect("url" in bare).toBe(false);
+    expect("image" in bare).toBe(false);
+  });
+
+  test("the home listing paginates with correct canonical, prev/next and structured data", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-pagination-"));
+    temporaryRoots.push(root);
+    const config = defaultConfig("Paged");
+    config.project.url = "https://example.test/docs";
+    const posts = Array.from({ length: 25 }, (_unused, index) => {
+      const p = post(`post-${String(index).padStart(2, "0")}`, "본문");
+      p.title = `글 ${index}`;
+      return p;
+    });
+    await buildSite({ listPosts: () => posts, getAnnotations: () => [] }, config, root);
+    const site = join(root, "_site");
+    const home = readFileSync(join(site, "index.html"), "utf-8");
+    const second = readFileSync(join(site, "page", "2.html"), "utf-8");
+    const third = readFileSync(join(site, "page", "3.html"), "utf-8");
+    expect(existsSync(join(site, "page", "4.html"))).toBe(false);
+
+    const cardCount = (html: string) => [...html.matchAll(/<a class="card"/g)].length;
+    expect(cardCount(home)).toBe(12);
+    expect(cardCount(second)).toBe(12);
+    expect(cardCount(third)).toBe(1);
+
+    expect(home).toContain('<link rel="canonical" href="https://example.test/docs/">');
+    expect(home).toContain('<link rel="next" href="https://example.test/docs/page/2.html">');
+    expect(home).not.toContain('rel="prev"');
+    expect(second).toContain('<link rel="canonical" href="https://example.test/docs/page/2.html">');
+    expect(second).toContain('<link rel="prev" href="https://example.test/docs/">');
+    expect(second).toContain('<link rel="next" href="https://example.test/docs/page/3.html">');
+    expect(third).toContain('<link rel="canonical" href="https://example.test/docs/page/3.html">');
+    expect(third).not.toContain('rel="next"');
+
+    // Page 2+ sits one directory deep: every reference has to shift with it.
+    expect(second).toContain('href="../p/post-12.html"');
+    expect(second).toContain('src="../static/app.js"');
+    expect(second).toContain('data-post-index="../posts.json"');
+    for (const reference of resourceReferences(second)) {
+      expect(existsSync(localOutputPath(site, join(site, "page", "2.html"), reference))).toBe(true);
+    }
+
+    // In-page navigation stays relative so the site works from any base path.
+    expect(home).toContain('<a class="pager-link pager-next" href="page/2.html" rel="next">');
+    expect(second).toContain('<a class="pager-link pager-prev" href="../" rel="prev">');
+    expect(second).toContain('<a class="pager-link pager-next" href="3.html" rel="next">');
+
+    // The head count and category chips describe the whole corpus, not one page.
+    expect(home).toContain("글 25편");
+    expect(second).toContain("글 25편");
+
+    const [blog, itemList] = structuredData(second);
+    expect(blog["@type"]).toBe("Blog");
+    expect(blog.url).toBe("https://example.test/docs/");
+    expect(itemList["@type"]).toBe("ItemList");
+    expect(itemList.numberOfItems).toBe(25);
+    expect(itemList.itemListElement.length).toBe(12);
+    // Positions continue across pages instead of restarting.
+    expect(itemList.itemListElement[0].position).toBe(13);
+    expect(itemList.itemListElement[0].url).toBe("https://example.test/docs/p/post-12.html");
+    expect(structuredData(home)[1].itemListElement[0].position).toBe(1);
+
+    const sitemap = readFileSync(join(site, "sitemap.xml"), "utf-8");
+    expect(sitemap).toContain("<loc>https://example.test/docs/page/2.html</loc>");
+    expect(sitemap).toContain("<loc>https://example.test/docs/page/3.html</loc>");
+    expect(sitemap).not.toContain("page/4.html");
+  });
+
+  test("a single-page home has no pager and no page directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "arxiblog-single-page-"));
+    temporaryRoots.push(root);
+    await buildSite(
+      { listPosts: () => [post("only", "본문")], getAnnotations: () => [] },
+      defaultConfig("Single"),
+      root
+    );
+    const home = readFileSync(join(root, "_site", "index.html"), "utf-8");
+    expect(home).not.toContain('class="pager"');
+    expect(home).not.toContain('rel="next"');
+    expect(existsSync(join(root, "_site", "page"))).toBe(false);
+    expect(home).toContain('data-post-index="posts.json"');
   });
 
   test("versioned arXiv links keep the requested PDF revision", async () => {

@@ -591,40 +591,137 @@
   }
 
   // ── Home search ──
+  // The home listing is paginated, so the cards in the DOM are only one page of
+  // the corpus. Search and the category filter therefore run against posts.json
+  // (already emitted for the whole site) and render their own result list,
+  // restoring the server-rendered page markup as soon as both filters are empty.
+  // When that file cannot be fetched (file://, offline) the old behaviour —
+  // filtering the cards already on the page — remains as a fallback.
   const search = document.getElementById("post-search");
-  if (search) {
-    const cards = Array.from(document.querySelectorAll("#cards .card"));
+  const cardContainer = document.getElementById("cards");
+  if (search && cardContainer) {
     const emptyMessage = document.getElementById("search-empty");
     const searchStatus = document.getElementById("search-status");
     const catFilter = document.getElementById("cat-filter");
+    const pager = document.querySelector(".pager");
+    const indexUrl = cardContainer.getAttribute("data-post-index") || "";
+    const postBase = cardContainer.getAttribute("data-post-base") || "p/";
+    const pageMarkup = cardContainer.innerHTML;
+    let cards = Array.from(cardContainer.querySelectorAll(".card"));
+    let allPosts = null;
+    let indexRequest = null;
     let activeCat = "";
     let announceTimer = 0;
     const normalize = function (value) {
       const text = String(value || "");
       return (text.normalize ? text.normalize("NFKC") : text).toLocaleLowerCase("ko-KR");
     };
-    const filterCards = function () {
-      const query = normalize(search.value.trim());
-      let shown = 0;
-      cards.forEach(function (card) {
-        const searchHit = !query || normalize(card.getAttribute("data-search")).includes(query);
-        const catHit =
-          !activeCat || (" " + (card.getAttribute("data-cats") || "") + " ").indexOf(" " + activeCat + " ") >= 0;
-        const hit = searchHit && catHit;
-        card.hidden = !hit;
-        if (hit) shown++;
+    const splitCats = function (value) {
+      return String(value || "").split(",").map(function (c) { return c.trim(); }).filter(Boolean);
+    };
+    const loadIndex = function () {
+      if (allPosts || !indexUrl) return Promise.resolve(allPosts);
+      if (!indexRequest) {
+        indexRequest = fetch(indexUrl)
+          .then(function (response) { return response.ok ? response.json() : null; })
+          .then(function (data) { allPosts = Array.isArray(data) ? data : null; return allPosts; })
+          .catch(function () { return null; });
+      }
+      return indexRequest;
+    };
+    const buildCard = function (entry) {
+      const link = document.createElement("a");
+      link.className = "card";
+      link.href = postBase + encodeURIComponent(entry.slug) + ".html";
+      const meta = document.createElement("div");
+      meta.className = "card-meta";
+      splitCats(entry.categories).slice(0, 3).forEach(function (category) {
+        const chip = document.createElement("span");
+        chip.className = "cat";
+        chip.textContent = category;
+        meta.appendChild(chip);
       });
+      const time = document.createElement("span");
+      time.className = "card-time";
+      time.textContent = (Number(entry.reading_minutes) || 0) + "분";
+      meta.appendChild(time);
+      const title = document.createElement("h2");
+      title.className = "card-title";
+      title.textContent = entry.title || "";
+      link.appendChild(meta);
+      link.appendChild(title);
+      [["card-subtitle", entry.subtitle], ["card-tldr", entry.tldr]].forEach(function (pair) {
+        if (!pair[1]) return;
+        const paragraph = document.createElement("p");
+        paragraph.className = pair[0];
+        paragraph.textContent = pair[1];
+        link.appendChild(paragraph);
+      });
+      const source = document.createElement("div");
+      source.className = "card-source";
+      source.textContent = "arXiv:" + (entry.arxiv_id || "");
+      link.appendChild(source);
+      return link;
+    };
+    const restorePage = function () {
+      if (cardContainer.getAttribute("data-mode") !== "results") return;
+      cardContainer.innerHTML = pageMarkup;
+      cardContainer.removeAttribute("data-mode");
+      cards = Array.from(cardContainer.querySelectorAll(".card"));
+      if (pager) pager.hidden = false;
+    };
+    const showResults = function (entries) {
+      cardContainer.replaceChildren.apply(cardContainer, entries.map(buildCard));
+      cardContainer.setAttribute("data-mode", "results");
+      if (pager) pager.hidden = true;
+    };
+    const announce = function (shown, query) {
       if (emptyMessage) emptyMessage.hidden = shown !== 0;
       window.clearTimeout(announceTimer);
       announceTimer = window.setTimeout(function () {
-        if (searchStatus) {
-          searchStatus.textContent = query
-            ? shown
-              ? "검색 결과 " + shown + "개"
-              : "검색 결과가 없습니다. 다른 검색어를 입력해 보세요."
-            : "";
-        }
+        if (!searchStatus) return;
+        searchStatus.textContent = query
+          ? shown
+            ? "검색 결과 " + shown + "개"
+            : "검색 결과가 없습니다. 다른 검색어를 입력해 보세요."
+          : "";
       }, 120);
+    };
+    const filterCards = function () {
+      const query = normalize(search.value.trim());
+      if (!query && !activeCat) {
+        restorePage();
+        cards.forEach(function (card) { card.hidden = false; });
+        announce(cards.length, "");
+        return;
+      }
+      loadIndex().then(function (entries) {
+        if (entries) {
+          const matches = entries.filter(function (entry) {
+            const haystack = normalize(
+              [entry.title, entry.subtitle, entry.tldr, entry.categories, entry.arxiv_id].join(" ")
+            );
+            const cats = " " + splitCats(entry.categories).map(normalize).join(" ") + " ";
+            return (!query || haystack.indexOf(query) >= 0) &&
+              (!activeCat || cats.indexOf(" " + activeCat + " ") >= 0);
+          });
+          showResults(matches);
+          announce(matches.length, query);
+          return;
+        }
+        // No index: fall back to filtering the cards on this page.
+        restorePage();
+        let shown = 0;
+        cards.forEach(function (card) {
+          const searchHit = !query || normalize(card.getAttribute("data-search")).includes(query);
+          const catHit =
+            !activeCat || (" " + (card.getAttribute("data-cats") || "") + " ").indexOf(" " + activeCat + " ") >= 0;
+          const hit = searchHit && catHit;
+          card.hidden = !hit;
+          if (hit) shown++;
+        });
+        announce(shown, query);
+      });
     };
     search.addEventListener("input", filterCards);
     search.addEventListener("search", filterCards);
