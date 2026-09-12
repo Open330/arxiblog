@@ -21,7 +21,7 @@ import {
   homePageCount,
 } from "./templates";
 import { renderFeed } from "./feed";
-import { writeOgImages, ogPngEnabled } from "./og";
+import { writeOgImages, writeSiteOgImage, ogPngEnabled } from "./og";
 import { prepareFonts } from "./fonts";
 import {
   prerenderMermaid,
@@ -508,6 +508,10 @@ async function renderSiteInto(
   // Generate every OG card up front with a single shared browser (one launch,
   // not one per post — the per-post launch blew build/test timeouts).
   const ogPaths = await writeOgImages(posts, config, ogDir, ogPngEnabled());
+  // Site-wide card: the index page's og:image and the fallback for posts
+  // whose own card could not be written.
+  const siteOgPath = await writeSiteOgImage(config, ogDir, ogPngEnabled());
+  const siteOgImage = ogBase && siteOgPath ? `${ogBase}${siteOgPath}` : "";
 
   // Render every diagram in the site once, up front, with a single browser. The
   // result replaces a ~3.4 MB per-page mermaid.min.js download with inline SVG;
@@ -568,7 +572,7 @@ async function renderSiteInto(
       }));
 
     const ogPath = ogPaths.get(post.slug) ?? "";
-    const ogImage = ogBase && ogPath ? `${ogBase}${ogPath}` : "";
+    const ogImage = ogBase && ogPath ? `${ogBase}${ogPath}` : siteOgImage;
     const enData = englishPayload(post);
     const hasTranslation = !!enData;
 
@@ -613,12 +617,12 @@ async function renderSiteInto(
   // The home listing is paginated so its size stops growing with the corpus;
   // page 1 stays at /index.html and the rest land at /page/<n>.html.
   const homePages = homePageCount(posts.length);
-  await Bun.write(join(outputDir, "index.html"), renderIndexPage({ config, posts, page: 1 }));
+  await Bun.write(join(outputDir, "index.html"), renderIndexPage({ config, posts, page: 1, ogImage: siteOgImage }));
   if (homePages > 1) {
     const pageDir = join(outputDir, "page");
     mkdirSync(pageDir, { recursive: true });
     for (let page = 2; page <= homePages; page += 1) {
-      await Bun.write(join(pageDir, `${page}.html`), renderIndexPage({ config, posts, page }));
+      await Bun.write(join(pageDir, `${page}.html`), renderIndexPage({ config, posts, page, ogImage: siteOgImage }));
     }
   }
 
@@ -644,7 +648,7 @@ async function renderSiteInto(
   await Bun.write(join(outputDir, "feed.xml"), renderFeed(config, posts));
 
   // 404 page (GitHub Pages serves /404.html; serve mode also uses it)
-  await Bun.write(join(outputDir, "404.html"), renderNotFoundPage(config));
+  await Bun.write(join(outputDir, "404.html"), renderNotFoundPage(config, siteOgImage));
 
   // Favicon — a self-contained SVG mark (no external asset)
   const favicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">

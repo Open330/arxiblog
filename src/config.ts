@@ -69,6 +69,26 @@ export interface ChatConfig {
   trust_proxy?: boolean;
 }
 
+/** Optional site analytics, injected into every generated page by the static build. */
+export interface AnalyticsConfig {
+  /** GA4 measurement ID (e.g. "G-XXXXXXXXXX"). Empty or absent = no analytics snippet. */
+  ga_measurement_id?: string;
+}
+
+const GA_MEASUREMENT_ID_PATTERN = /^G-[A-Z0-9]{4,20}$/;
+
+/**
+ * The configured GA4 measurement ID, or "" when unset or malformed. The ID is
+ * interpolated into an inline <script>, so only the strict G-XXXX shape is ever
+ * accepted — a typo in the TOML disables analytics instead of breaking pages.
+ */
+export function gaMeasurementId(config: Pick<ArxiblogConfig, "analytics"> | undefined): string {
+  const raw = config?.analytics?.ga_measurement_id;
+  if (typeof raw !== "string") return "";
+  const id = raw.trim().toUpperCase();
+  return GA_MEASUREMENT_ID_PATTERN.test(id) ? id : "";
+}
+
 export interface ArxiblogConfig {
   project: { name: string; created: string; tagline?: string; url?: string };
   build: { output_dir: string };
@@ -94,6 +114,8 @@ export interface ArxiblogConfig {
     translate_en?: boolean; // generate an English version of each post
     factcheck?: boolean; // verify structured claims + annotations against the source
   };
+  /** `[analytics]` — GA4 tag for the generated site (empty = off). */
+  analytics?: AnalyticsConfig;
 }
 
 export const DEFAULT_CHAT: Required<ChatConfig> = {
@@ -188,6 +210,7 @@ export function saveConfig(root: string, config: ArxiblogConfig): void {
   // Preserve sections the settings form does not edit, so saving settings never
   // silently drops them (e.g. a fixed [server].admin_token or [features] flags).
   if (config.features) ordered.features = config.features;
+  if (config.analytics) ordered.analytics = config.analytics;
   if (config.server && config.server.admin_token) ordered.server = config.server;
   if (config.personas) ordered.personas = config.personas;
   const destination = join(root, CONFIG_FILE);
@@ -241,6 +264,14 @@ export function loadConfig(root: string): ArxiblogConfig {
   };
   const server = (raw.server || {}) as { admin_token?: unknown };
   raw.server = { admin_token: typeof server.admin_token === "string" ? server.admin_token.trim() : "" };
+  const analytics = (raw.analytics || {}) as { ga_measurement_id?: unknown };
+  const measurementId = typeof analytics.ga_measurement_id === "string" ? analytics.ga_measurement_id.trim() : "";
+  raw.analytics = { ga_measurement_id: measurementId };
+  if (measurementId && !gaMeasurementId({ analytics: raw.analytics })) {
+    console.warn(
+      `\x1b[33m⚠ [analytics] ga_measurement_id 형식이 올바르지 않아 무시합니다 (예: G-XXXXXXXXXX): ${measurementId}\x1b[0m`
+    );
+  }
   const personas = raw.personas?.length
     ? raw.personas
     : (() => {

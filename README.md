@@ -186,6 +186,17 @@ src/
 └── deploy.ts
 ```
 
+### 애널리틱스 (선택)
+
+`arxiblog.toml`에 `[analytics]` 섹션을 추가하면 빌드된 모든 페이지 `<head>`에 GA4(gtag.js) 스니펫이 들어갑니다. 비워 두거나 섹션이 없으면 아무것도 삽입되지 않습니다. 형식이 `G-XXXXXXXXXX`가 아니면 경고 후 무시합니다.
+
+```toml
+[analytics]
+ga_measurement_id = ""   # 예: "G-XXXXXXXXXX", 비우면 끔
+```
+
+`arxiblog serve`의 CSP는 `www.googletagmanager.com`(script)과 `www.google-analytics.com` / `region1.google-analytics.com`(connect)만 추가로 허용합니다.
+
 ## 지원 LLM 프로바이더
 
 | 프로바이더 | 추천 모델 | 비고 |

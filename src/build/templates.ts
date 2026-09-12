@@ -1,4 +1,4 @@
-import type { ArxiblogConfig } from "../config";
+import { gaMeasurementId, type ArxiblogConfig } from "../config";
 import type { Post, Annotation } from "../store";
 import { escapeHtml, splitCategories } from "../utils";
 
@@ -18,6 +18,8 @@ interface HeadOptions {
   siteName?: string;
   /** Absolute URL of the post's Open Graph image; "" or absent omits og:image. */
   ogImage?: string;
+  /** Validated GA4 measurement ID; "" or absent omits the gtag.js snippet. */
+  gaMeasurementId?: string;
   /** <html lang> and og:locale (default "ko"). */
   htmlLang?: string;
   /** hreflang alternate links (KO/EN + x-default). */
@@ -103,7 +105,20 @@ ${opts.mathContent ? `<link rel="stylesheet" href="${assetPrefix}static/vendor/k
 <link rel="stylesheet" href="${assetPrefix}static/style.css">
 <script>(function(){try{var t=localStorage.getItem("arxiblog-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 ${opts.jsonLd ? `<script type="application/ld+json">${opts.jsonLd}</script>` : ""}
+${analyticsSnippet(opts.gaMeasurementId)}
 </head>`;
+}
+
+/**
+ * GA4 gtag.js bootstrap for the <head>. Only a validated `G-…` ID is ever
+ * interpolated (see gaMeasurementId); anything else yields no markup. The
+ * server's CSP allows exactly these Google origins for script/connect.
+ */
+export function analyticsSnippet(measurementId: string | undefined): string {
+  const id = (measurementId || "").trim();
+  if (!/^G-[A-Z0-9]{4,20}$/.test(id)) return "";
+  return `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${id}');</script>`;
 }
 
 /** Drop empty values so structured data never advertises a blank field. */
@@ -397,6 +412,7 @@ export function renderPostPage(opts: {
     ogType: "article",
     siteName: opts.config.project.name,
     ogImage: opts.ogImage,
+    gaMeasurementId: gaMeasurementId(opts.config),
     htmlLang: isEn ? "en" : "ko",
     alternates,
     jsonLd,
@@ -506,7 +522,13 @@ function homePageHref(n: number, from: number): string {
  * the ItemList positions. Client-side search reaches the posts that are not on
  * this page through posts.json (see app.js).
  */
-export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[]; page?: number }): string {
+export function renderIndexPage(opts: {
+  config: ArxiblogConfig;
+  posts: Post[];
+  page?: number;
+  /** Absolute URL of the site-wide Open Graph card; "" or absent omits og:image. */
+  ogImage?: string;
+}): string {
   const { config, posts } = opts;
   const totalPages = homePageCount(posts.length);
   const page = Math.min(Math.max(1, Math.floor(opts.page || 1)), totalPages);
@@ -605,6 +627,8 @@ export function renderIndexPage(opts: { config: ArxiblogConfig; posts: Post[]; p
       assetPrefix: prefix,
       canonicalUrl,
       siteName: config.project.name,
+      ogImage: opts.ogImage,
+      gaMeasurementId: gaMeasurementId(config),
       prevUrl: page > 1 ? absoluteOrRelative(page - 1) : "",
       nextUrl: page < totalPages ? absoluteOrRelative(page + 1) : "",
       jsonLd,
@@ -659,12 +683,14 @@ ${siteHeader(homePageHref(1, page), config.project.name)}
 
 // ── 404 page ──
 
-export function renderNotFoundPage(config: ArxiblogConfig): string {
+export function renderNotFoundPage(config: ArxiblogConfig, ogImage = ""): string {
   const basePath = publicBasePath(config.project.url);
   return `${head("404 · " + config.project.name, "페이지를 찾을 수 없습니다", {
     assetPrefix: basePath,
     noindex: true,
     siteName: config.project.name,
+    ogImage,
+    gaMeasurementId: gaMeasurementId(config),
   })}
 <body>
 <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>

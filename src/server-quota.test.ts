@@ -214,14 +214,19 @@ describe("cache and security response policy", () => {
     expect(directives.get("frame-ancestors")).toBe("'none'");
     expect(directives.get("object-src")).toBe("'none'");
     expect(directives.get("base-uri")).toBe("'self'");
-    expect(directives.get("connect-src")).toBe("'self'");
+    // GA4 beacons (gtag.js) are the only third-party connect origins.
+    expect(directives.get("connect-src")).toBe(
+      "'self' https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com"
+    );
     expect(directives.get("font-src")).toBe("'self'");
     // Hot-linked arxiv figures.
     expect(directives.get("img-src")).toContain("https:");
     // Build-time inline bootstraps (theme restore, annotation payload, admin
-    // script) mean a nonce is unavailable; third-party origins stay blocked.
-    expect(directives.get("script-src")).toBe("'self' 'unsafe-inline'");
-    expect(directives.get("script-src")).not.toContain("http");
+    // script) mean a nonce is unavailable; the only third-party script origin
+    // is the GA4 loader — no wildcard, no http.
+    expect(directives.get("script-src")).toBe("'self' 'unsafe-inline' https://www.googletagmanager.com");
+    expect(directives.get("script-src")).not.toContain("http://");
+    expect(directives.get("script-src")).not.toContain("*");
     const headers = documentSecurityHeaders();
     expect(headers["X-Frame-Options"]).toBe("DENY");
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
