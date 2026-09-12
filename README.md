@@ -205,3 +205,6 @@ src/
 ## 라이선스
 
 MIT — `open330`. kiwimu(`@open330/kiwimu`)의 설계를 참고했습니다.
+
+---
+<p align="center"><sub>Part of <a href="https://github.com/Open330">Open330</a> · open source tools for AI-agent workflows · <a href="https://open330.github.io">open330.github.io</a></sub></p>
