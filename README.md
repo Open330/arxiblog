@@ -7,6 +7,9 @@
 arXiv 논문 하나를 넣으면 — LLM이 학계 사람이 아니어도 술술 읽히는 "논문 읽기 블로그" 글로 바꿔줍니다.
 전문용어엔 자동 주석, 흐름엔 **mermaid 도식**, 읽다 막히면 옆의 **AI 챗**. 웹 관리 페이지에서 논문 추가·설정까지.
 
+[![CI](https://github.com/Open330/arxiblog/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Open330/arxiblog/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40open330%2Farxiblog?logo=npm)](https://www.npmjs.com/package/@open330/arxiblog)
+
 `Bun` · `TypeScript` · `MIT` · [라이브 데모](https://arxiblog.jiun.dev)
 
 </div>
